@@ -93,8 +93,9 @@ public class AssessService {
     toolCalls.add(toMap(route.call()));
     emitTool(listener, route.call());
 
-    // 2. 语义检索：按危害因素过滤召回适用条款
-    String query = hazard + " 职业禁忌证 目标疾病 检查内容 " + facts.keySet();
+    // 2. 语义检索：优先危害因素过滤；向量库覆盖不足时自动回退关键词直查（工具内已实现二次放宽）。
+    // 查询文本使用中文危害名+检查项中文名，避免英文编码在中文向量空间失配。
+    String query = hazardName(hazard) + " 职业禁忌证 目标疾病 检查内容 " + String.join(" ", itemNames(snapshot));
     var retrieval = retrievalTools.retrieve(query, 8, hazard, null);
     toolCalls.add(toMap(retrieval.call()));
     emitTool(listener, retrieval.call());
@@ -135,6 +136,34 @@ public class AssessService {
     return facts;
   }
 
+  /** 危害中文名：向量查询用中文，避免英文编码在中文向量空间失配。 */
+  private String hazardName(String hazardCode) {
+    if (hazardCode == null) {
+      return "";
+    }
+    return switch (hazardCode) {
+      case "noise" -> "噪声";
+      case "lead" -> "铅及其无机化合物";
+      case "benzene" -> "苯";
+      case "dust_silica" -> "游离二氧化硅粉尘";
+      case "toluene" -> "甲苯";
+      default -> hazardCode;
+    };
+  }
+
+  /** 检查项中文名列表：拼入向量查询文本。 */
+  private List<String> itemNames(ExamService.ExamSnapshot snapshot) {
+    List<String> names = new ArrayList<>();
+    for (var item : snapshot.items()) {
+      if (item.getItemName() != null && !item.getItemName().isBlank()) {
+        names.add(item.getItemName());
+      } else {
+        names.add(item.getItemCode());
+      }
+    }
+    return names;
+  }
+
   private List<Rule> loadRules(String hazard, String ruleVersion) {
     var wrapper = new LambdaQueryWrapper<Rule>().eq(Rule::getEnabled, true);
     if (hazard != null && !hazard.isBlank()) {
@@ -152,7 +181,7 @@ public class AssessService {
     try {
       StringBuilder prompt = new StringBuilder();
       prompt.append("你是职业健康检查辅助判定助手，只做建议性表述，不得使用确诊措辞。\n");
-      prompt.append("危害因素：").append(hazard).append("\n检查项：").append(facts).append("\n");
+      prompt.append("危害因素：").append(hazardName(hazard)).append("\n检查项：").append(facts).append("\n");
       prompt.append("适用条款：\n");
       for (var c : clauses.subList(0, Math.min(5, clauses.size()))) {
         prompt.append("- ").append(c.standardCode()).append(" ").append(c.clauseNo())

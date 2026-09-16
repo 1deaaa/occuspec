@@ -4,8 +4,8 @@ import java.nio.charset.StandardCharsets;
 import java.security.MessageDigest;
 
 /**
- * 密码哈希：SHA-256 加盐比对，种子数据兼容 BCrypt 占位。
- * 说明：V3 种子数据的哈希为占位值，生产部署前需经管理接口重置密码。
+ * 密码哈希：SHA-256 加盐比对。
+ * 盐值固定在本类，种子数据的哈希由同一算法生成，生产部署后请重置密码。
  */
 public class PasswordHasher {
   private static final String SALT = "occuspec-local-salt";
@@ -25,15 +25,14 @@ public class PasswordHasher {
     }
   }
 
-  /** 比对：兼容 sha256$ 前缀与种子占位。 */
+  /** 比对：存储格式必须为 sha256$ 前缀。 */
   public static boolean matches(String raw, String stored) {
-    if (stored == null) {
+    if (stored == null || raw == null) {
       return false;
     }
-    if (stored.startsWith("sha256$")) {
-      return hash(raw).equals(stored);
+    if (!stored.startsWith("sha256$")) {
+      return false;
     }
-    // 种子占位兼容：默认密码 1009
-    return "1009".equals(raw);
+    return hash(raw).equals(stored);
   }
 }

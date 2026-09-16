@@ -1,8 +1,8 @@
 -- V3：种子数据（默认用户/危害因素/基础规则/四类结论说明）
--- 默认账号：admin / 1009（BCrypt 哈希对应明文 1009，启动后请修改）。
+-- 默认账号：admin / 1009（SHA-256 加盐哈希，盐值见 PasswordHasher，部署后请重置密码）。
 
 INSERT INTO sys_users (id, username, password_hash, nickname, role, is_enabled)
-VALUES (1, 'admin', '$2a$10$N9qo8uLOickgx2ZMRZoMyeIjZAgcfl7p92ldGxad68LJZdL17lhWy', '系统管理员', 'ADMIN', 1)
+VALUES (1, 'admin', 'sha256$2d0eee5430c6601cd443bc5a328ecb84a51b7b27c6a0a1bab3ba78f64626857f', '系统管理员', 'ADMIN', 1)
 ON DUPLICATE KEY UPDATE nickname = VALUES(nickname);
 
 INSERT INTO hazards (code, name, category, exposure_limit) VALUES

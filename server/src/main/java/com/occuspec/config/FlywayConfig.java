@@ -21,6 +21,7 @@ public class FlywayConfig {
         .locations("classpath:db/migration/mysql")
         .table("flyway_schema_history")
         .baselineOnMigrate(true)
+        .validateOnMigrate(false)
         .load();
   }
 
