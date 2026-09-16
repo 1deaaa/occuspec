@@ -99,7 +99,7 @@ export default function ExamsPage() {
 
   return (
     <ScrollArea className="h-full">
-      <div className="mx-auto flex w-full max-w-5xl flex-col gap-3 p-4">
+      <div className="flex w-full flex-col gap-3 p-4">
         <Card>
           <CardHeader>
             <CardTitle className="flex items-center gap-2">

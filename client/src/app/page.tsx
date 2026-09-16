@@ -211,7 +211,7 @@ export default function ChatPage() {
       {/* 对话主区：占满剩余空间，输入框吸底 */}
       <div className="flex min-w-0 flex-1 flex-col">
         <ScrollArea className="min-h-0 flex-1">
-          <div className="mx-auto w-full max-w-4xl px-4 py-4">
+          <div className="w-full px-4 py-4">
             {messages.length === 0 ? (
               <div className="border bg-card p-4 text-sm leading-6 text-muted-foreground">
                 {t("chat.welcome")}
@@ -255,7 +255,7 @@ export default function ChatPage() {
 
         {/* 输入区：吸底，Enter 发送，Shift+Enter 换行 */}
         <div className="shrink-0 border-t bg-card p-3">
-          <div className="mx-auto flex w-full max-w-4xl items-end gap-2">
+          <div className="flex w-full items-end gap-2">
             <Textarea
               value={input}
               onChange={(e) => setInput(e.target.value)}
@@ -279,7 +279,7 @@ export default function ChatPage() {
               </Button>
             )}
           </div>
-          <div className="mx-auto mt-1 w-full max-w-4xl text-[11px] text-muted-foreground">
+          <div className="mt-1 w-full text-[11px] text-muted-foreground">
             {t("app.disclaimer")}
           </div>
         </div>

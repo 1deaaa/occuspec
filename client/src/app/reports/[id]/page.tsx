@@ -44,7 +44,7 @@ export default function ReportDetailPage({ params }: { params: { id: string } })
 
   return (
     <ScrollArea className="h-full">
-      <div className="mx-auto flex w-full max-w-4xl flex-col gap-3 p-4">
+      <div className="flex w-full flex-col gap-3 p-4">
         {/* 结论区：显著标注复核要求 */}
         <Card className="border-l-4 border-l-primary">
           <CardHeader>

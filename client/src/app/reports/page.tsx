@@ -31,7 +31,7 @@ export default function ReportsPage() {
 
   return (
     <ScrollArea className="h-full">
-      <div className="mx-auto w-full max-w-5xl p-4">
+      <div className="w-full p-4">
         <Card>
           <CardHeader>
             <CardTitle className="flex items-center gap-2">
