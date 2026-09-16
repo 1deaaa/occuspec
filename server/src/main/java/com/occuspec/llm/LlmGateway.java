@@ -26,6 +26,18 @@ public interface LlmGateway {
   List<float[]> embed(List<String> texts);
 
   /**
+   * 带图片的多模态补全：文本提示 + 若干图片 → 文本。
+   * 供报告图片结构化抽取使用；失败返回降级结果，不抛穿。
+   *
+   * @param systemPrompt 系统提示词（可空）
+   * @param userPrompt 文本提示词
+   * @param images 图片列表（data URL 或公网 URL）
+   */
+  default LlmResult completeWithImages(String systemPrompt, String userPrompt, List<LlmImage> images) {
+    return LlmResult.degraded("");
+  }
+
+  /**
    * 带工具的多轮对话补全（非流式）：返回正文、推理与工具调用请求。
    * 供 Agentic 循环逐轮调用，由调用方执行工具并回填结果。
    *

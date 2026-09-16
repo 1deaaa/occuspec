@@ -7,6 +7,7 @@ import {
   BookOpen,
   ClipboardList,
   FileText,
+  FileUp,
   FlaskConical,
   History,
   Layers,
@@ -27,6 +28,7 @@ const CHAT_NAV = [{ href: "/", key: "nav.chat", icon: MessagesSquare }] as const
 
 const PROFESSIONAL_NAV = [
   { href: "/exams", key: "nav.exams", icon: ClipboardList },
+  { href: "/reports/upload", key: "nav.reportsUpload", icon: FileUp },
   { href: "/assess", key: "nav.assess", icon: FlaskConical },
   { href: "/reports", key: "nav.reports", icon: FileText },
   { href: "/clauses", key: "nav.clauses", icon: BookOpen },

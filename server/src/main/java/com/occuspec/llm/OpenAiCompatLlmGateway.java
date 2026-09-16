@@ -228,6 +228,47 @@ public class OpenAiCompatLlmGateway implements LlmGateway {
     }
   }
 
+  @Override
+  public LlmResult completeWithImages(String systemPrompt, String userPrompt, List<LlmImage> images) {
+    try {
+      ObjectNode body = objectMapper.createObjectNode();
+      body.put("model", model);
+      ArrayNode messages = objectMapper.createArrayNode();
+      if (systemPrompt != null && !systemPrompt.isBlank()) {
+        messages.add(msg("system", systemPrompt));
+      }
+      // 多模态消息：content 为数组，依次为文本与图片
+      ObjectNode userMessage = objectMapper.createObjectNode();
+      userMessage.put("role", "user");
+      ArrayNode content = objectMapper.createArrayNode();
+      ObjectNode textPart = objectMapper.createObjectNode();
+      textPart.put("type", "text");
+      textPart.put("text", userPrompt == null ? "" : userPrompt);
+      content.add(textPart);
+      if (images != null) {
+        for (LlmImage image : images) {
+          if (image == null || image.base64() == null || image.base64().isBlank()) {
+            continue;
+          }
+          ObjectNode imagePart = objectMapper.createObjectNode();
+          imagePart.put("type", "image_url");
+          ObjectNode imageUrl = objectMapper.createObjectNode();
+          imageUrl.put("url", image.toDataUrl());
+          imagePart.set("image_url", imageUrl);
+          content.add(imagePart);
+        }
+      }
+      userMessage.set("content", content);
+      messages.add(userMessage);
+      body.set("messages", messages);
+      String resp = postWithRetry(baseUrl + "/chat/completions", apiKey, body, 2);
+      return parseChatResponse(resp);
+    } catch (Exception ex) {
+      log.warn("多模态调用失败已降级 err={}", ex.getMessage());
+      return LlmResult.degraded("");
+    }
+  }
+
   /** 构造上游消息：assistant 工具调用与 tool 结果需按协议回填。 */
   private ObjectNode toWireMessage(ChatMsg m) {
     ObjectNode node = objectMapper.createObjectNode();
