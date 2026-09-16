@@ -1,0 +1,85 @@
+server:
+  port: ${SERVER_PORT:8080}
+  servlet:
+    context-path: /api/v1
+
+spring:
+  application:
+    name: occuspec-server
+  datasource:
+    url: jdbc:mysql://${MYSQL_HOST:127.0.0.1}:${MYSQL_PORT:3306}/${MYSQL_DB:occuspec}?useUnicode=true&characterEncoding=utf8&serverTimezone=Asia/Shanghai
+    username: ${MYSQL_USER:root}
+    password: ${MYSQL_PASSWORD:1009}
+    driver-class-name: com.mysql.cj.jdbc.Driver
+    hikari:
+      maximum-pool-size: 10
+      minimum-idle: 2
+  data:
+    redis:
+      host: ${REDIS_HOST:127.0.0.1}
+      port: ${REDIS_PORT:6379}
+      password: ${REDIS_PASSWORD:1009}
+      lettuce:
+        pool:
+          max-active: 16
+          max-idle: 8
+          min-idle: 2
+  jackson:
+    serialization:
+      write-dates-as-timestamps: false
+
+mybatis-plus:
+  configuration:
+    map-underscore-to-camel-case: true
+    log-impl: org.apache.ibatis.logging.slf4j.Slf4jImpl
+  global-config:
+    db-config:
+      id-type: assign_id
+      logic-delete-field: deleted
+      logic-delete-value: 1
+      logic-not-delete-value: 0
+
+sa-token:
+  token-name: satoken
+  timeout: 7200
+  active-timeout: 1800
+  is-concurrent: true
+  is-share: true
+  token-style: uuid
+
+knife4j:
+  enable: true
+  production: false
+
+logging:
+  level:
+    com.occuspec: INFO
+  pattern:
+    console: "%d{yyyy-MM-dd HH:mm:ss} [%X{traceId}] %-5level %logger{36} - %msg%n"
+
+occuspec:
+  pg:
+    host: ${PG_HOST:127.0.0.1}
+    port: ${PG_PORT:5432}
+    db: ${PG_DB:occuspec}
+    user: ${PG_USER:postgres}
+    password: ${PG_PASSWORD:1009}
+  llm:
+    base-url: ${LLM_BASE_URL:https://dashscope.aliyuncs.com/compatible-mode/v1}
+    api-key: ${LLM_API_KEY:}
+    model: ${LLM_MODEL:qwen3.8-flash}
+    reasoning-effort: ${LLM_REASONING_EFFORT:xhigh}
+  embedding:
+    base-url: ${EMBEDDING_BASE_URL:https://api.siliconflow.cn/v1}
+    api-key: ${EMBEDDING_API_KEY:}
+    model: ${EMBEDDING_MODEL:Qwen/Qwen3-Embedding-8B}
+    dimensions: ${EMBEDDING_DIMENSIONS:1024}
+  thread-pool:
+    assess:
+      core: 4
+      max: 8
+      queue: 200
+    batch:
+      core: 2
+      max: 4
+      queue: 100

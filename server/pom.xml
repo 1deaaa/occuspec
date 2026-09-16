@@ -166,7 +166,6 @@
       <groupId>com.baomidou</groupId>
       <artifactId>mybatis-plus-jsqlparser</artifactId>
       <version>${mybatis-plus.version}</version>
-      <scope>test</scope>
     </dependency>
   </dependencies>
 
