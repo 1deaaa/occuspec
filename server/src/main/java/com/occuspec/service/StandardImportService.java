@@ -2,13 +2,10 @@ package com.occuspec.service;
 
 import com.baomidou.mybatisplus.core.conditions.query.LambdaQueryWrapper;
 import com.occuspec.entity.Clause;
-import com.occuspec.entity.Hazard;
 import com.occuspec.entity.Standard;
 import com.occuspec.mapper.ClauseMapper;
-import com.occuspec.mapper.HazardMapper;
 import com.occuspec.mapper.StandardMapper;
 import com.occuspec.parser.ClauseSplitter;
-import com.occuspec.parser.HazardCatalogParser;
 import com.occuspec.parser.HazardResolver;
 import com.occuspec.parser.MetadataExtractor;
 import com.occuspec.parser.PhaseExtractor;
@@ -23,42 +20,45 @@ import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import org.springframework.beans.factory.annotation.Value;
 import org.springframework.stereotype.Service;
+import org.springframework.transaction.annotation.Propagation;
 import org.springframework.transaction.annotation.Transactional;
 
 /**
  * 标准解析入库服务：读取 Markdown，按条款切分，提取元数据后落库。
- * 两份重复的 GBZ 188 按正文哈希去重。
+ *
+ * <p>事务边界说明：单文件导入的方法由 {@link #importAll()} 经注入的自身代理调用，
+ * 而非 this 直接调用，避免 Spring AOP 自调用导致 {@code @Transactional} 失效。
  */
 @Service
 public class StandardImportService {
   private static final Logger log = LoggerFactory.getLogger(StandardImportService.class);
+
   private final StandardMapper standardMapper;
   private final ClauseMapper clauseMapper;
-  private final HazardMapper hazardMapper;
+  private final HazardRegistry hazardRegistry;
   private final ClauseSplitter splitter;
   private final PhaseExtractor phaseExtractor;
-  private final HazardCatalogParser hazardCatalogParser;
   private final Path dataDir;
-  /** 危害因素解析器：首次导入 GBZ 188 后按目录构建，供后续标准按名称匹配。 */
-  private volatile HazardResolver hazardResolver;
+  /** 自身代理（延迟注入，避免构造期循环依赖）：用于让单文件导入的事务注解生效。 */
+  private final StandardImportService self;
 
   public StandardImportService(
       StandardMapper standardMapper,
       ClauseMapper clauseMapper,
-      HazardMapper hazardMapper,
-      @Value("${occuspec.data-dir:../data-markdown}") String dataDir) {
+      HazardRegistry hazardRegistry,
+      @Value("${occuspec.data-dir:../data-markdown}") String dataDir,
+      @org.springframework.context.annotation.Lazy StandardImportService self) {
     this.standardMapper = standardMapper;
     this.clauseMapper = clauseMapper;
-    this.hazardMapper = hazardMapper;
+    this.hazardRegistry = hazardRegistry;
     this.splitter = new ClauseSplitter();
     this.phaseExtractor = new PhaseExtractor();
-    this.hazardCatalogParser = new HazardCatalogParser();
     this.dataDir = Path.of(dataDir);
+    this.self = self;
   }
 
-  /** 全量导入：遍历数据目录顶层 Markdown。 */
+  /** 全量导入：先导入 GBZ 188 初始化危害因素目录，再导入其余标准。 */
   public ImportResult importAll() throws Exception {
-    // 先导入 GBZ 188，用其目录初始化危害因素表与解析器，其余标准按名称匹配
     List<Path> mdFiles = listMarkdown();
     Path gbz188 = mdFiles.stream()
         .filter(p -> p.getFileName().toString().startsWith("GBZ188"))
@@ -68,19 +68,19 @@ public class StandardImportService {
     int clauses = 0;
     int skipped = 0;
     if (gbz188 != null) {
-      FileResult r = importFile(gbz188);
+      FileResult result = self.importFile(gbz188);
       files++;
-      clauses += r.imported();
-      skipped += r.skipped();
+      clauses += result.imported();
+      skipped += result.skipped();
     }
     for (Path file : mdFiles) {
       if (file.equals(gbz188)) {
         continue;
       }
-      FileResult r = importFile(file);
+      FileResult result = self.importFile(file);
       files++;
-      clauses += r.imported();
-      skipped += r.skipped();
+      clauses += result.imported();
+      skipped += result.skipped();
     }
     log.info("标准导入完成 files={} clauses={} skipped={}", files, clauses, skipped);
     return new ImportResult(files, clauses, skipped);
@@ -97,24 +97,24 @@ public class StandardImportService {
     }
   }
 
-  /** 导入单个文件，返回新增与跳过数。 */
-  @Transactional
+  /**
+   * 导入单个文件：整卷事务，任一条款异常不回滚已成功的其他条款（条级别容错）。
+   * 由外部（{@link #importAll()} 经代理，或控制器直接调用）进入，保证事务注解生效。
+   */
+  @Transactional(propagation = Propagation.REQUIRES_NEW)
   public FileResult importFile(Path file) throws Exception {
     String markdown = Files.readString(file, StandardCharsets.UTF_8);
     String head = markdown.length() > 4000 ? markdown.substring(0, 4000) : markdown;
     String standardCode = StandardMeta.extractStandardCode(head, file.getFileName().toString());
     String fileName = file.getFileName().toString();
-    // GBZ 188：初始化危害因素目录（97 项）与解析器
-    if (HazardResolver.isGbz188(standardCode)) {
-      initializeHazards(markdown, standardCode);
+    if (HazardResolver.isGbz188(standardCode) && !hazardRegistry.initialized()) {
+      hazardRegistry.initialize(markdown, standardCode);
     }
-    // 整卷哈希去重：重复文件直接跳过
     String docHash = sha256(markdown);
     String docMark = "DOC:" + docHash.substring(0, 32);
-    Long dupDoc = clauseMapper.selectCount(
-        new LambdaQueryWrapper<Clause>()
-            .eq(Clause::getStandardCode, truncate(standardCode, 56))
-            .eq(Clause::getClauseNo, docMark));
+    Long dupDoc = clauseMapper.selectCount(new LambdaQueryWrapper<Clause>()
+        .eq(Clause::getStandardCode, truncate(standardCode, 56))
+        .eq(Clause::getClauseNo, docMark));
     if (dupDoc != null && dupDoc > 0) {
       return new FileResult(0, 1);
     }
@@ -142,7 +142,8 @@ public class StandardImportService {
       clause.setContent(chunk.content());
       clause.setPageNo(chunk.pageNo() == 0 ? null : chunk.pageNo());
       clause.setAppendixType(truncate(chunk.appendixType(), 12));
-      clause.setHazardCode(truncate(resolveHazard(standardCode, standardName, chunk), 60));
+      clause.setHazardCode(truncate(
+          hazardRegistry.resolve(standardCode, standardName, chunk.clauseNo()), 60));
       clause.setPhase(truncate(
           phaseExtractor.extract(chunk.clauseNo(), chunk.title(), chunk.content()), 12));
       clause.setCheckClass(truncate(MetadataExtractor.extractCheckClass(chunk.content()), 12));
@@ -155,12 +156,10 @@ public class StandardImportService {
         clauseMapper.insert(clause);
         imported++;
       } catch (Exception ex) {
-        // 唯一键冲突视为重复跳过
         skipped++;
         log.debug("条款重复跳过 std={} no={}", standardCode, chunk.clauseNo());
       }
     }
-    // 记录整卷指纹，防重复导入
     Clause mark = new Clause();
     mark.setStandardCode(truncate(standardCode, 56));
     mark.setClauseNo(docMark);
@@ -171,50 +170,9 @@ public class StandardImportService {
     return new FileResult(imported, skipped);
   }
 
-  /** 初始化危害因素表（97 项）与解析器；已存在则确保解析器可用。 */
-  private void initializeHazards(String markdown, String standardCode) {
-    if (hazardResolver != null) {
-      return;
-    }
-    List<HazardCatalogParser.HazardItem> items = hazardCatalogParser.parse(markdown);
-    for (HazardCatalogParser.HazardItem item : items) {
-      String code = HazardCatalogParser.toCode(item.sectionNo());
-      Hazard existing = hazardMapper.selectById(code);
-      if (existing != null) {
-        continue;
-      }
-      Hazard hazard = new Hazard();
-      hazard.setCode(code);
-      hazard.setName(truncate(item.name(), 120));
-      hazard.setCategory(truncate(item.category(), 16));
-      hazard.setExposureLimit("");
-      hazard.setSectionNo(item.sectionNo());
-      hazard.setSourceStandard(truncate(standardCode, 60));
-      hazard.setAliases(toJson(item.aliases()));
-      try {
-        hazardMapper.insert(hazard);
-      } catch (Exception ex) {
-        log.debug("危害因素已存在 code={}", code);
-      }
-    }
-    hazardResolver = new HazardResolver(items);
-    log.info("危害因素目录初始化完成 count={}", items.size());
-  }
-
-  /** 解析危害因素：优先用已构建的解析器，未初始化时按标准号回退。 */
-  private String resolveHazard(String standardCode, String standardName, ClauseSplitter.Chunk chunk) {
-    HazardResolver resolver = hazardResolver;
-    if (resolver != null) {
-      return resolver.resolve(standardCode, standardName, chunk.clauseNo());
-    }
-    // 非 GBZ 188 标准先于 188 导入时的兜底：仅按名称匹配
-    return new HazardResolver(List.of()).resolve(standardCode, standardName, chunk.clauseNo());
-  }
-
   private void upsertStandard(String code, String fileName) {
     String stdCode = truncate(code, 60);
-    Standard existing = standardMapper.selectById(stdCode);
-    if (existing != null) {
+    if (standardMapper.selectById(stdCode) != null) {
       return;
     }
     Standard standard = new Standard();

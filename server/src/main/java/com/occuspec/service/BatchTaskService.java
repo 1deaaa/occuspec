@@ -69,36 +69,54 @@ public class BatchTaskService {
     }
   }
 
-  /** 执行单个任务：解析 examId 列表逐条判定，更新成功失败计数。 */
+  /** 执行单个任务：先 DB 原子抢占，再并发判定各条体检记录。 */
   public void run(long taskId) {
-    BatchTask task = batchTaskMapper.selectById(taskId);
-    if (task == null || !BatchTaskStatus.PENDING.name().equals(task.getStatus())) {
+    // 原子抢占：check-then-act 存在竞态，改用条件更新按影响行数判断归属
+    int claimed = batchTaskMapper.claim(
+        taskId, BatchTaskStatus.PENDING.name(), BatchTaskStatus.RUNNING.name());
+    if (claimed == 0) {
+      log.debug("任务已被其他节点抢占或状态非待执行 task={}", taskId);
       return;
     }
-    task.setStatus(BatchTaskStatus.RUNNING.name());
-    task.setUpdatedAt(LocalDateTime.now());
-    batchTaskMapper.updateById(task);
-    int success = 0;
-    int fail = 0;
-    try {
-      for (Long examId : parseExamIds(task.getErrorUrl())) {
+    BatchTask task = batchTaskMapper.selectById(taskId);
+    if (task == null) {
+      return;
+    }
+    List<Long> examIds = parseExamIds(task.getErrorUrl());
+    java.util.concurrent.atomic.AtomicInteger success = new java.util.concurrent.atomic.AtomicInteger();
+    java.util.concurrent.atomic.AtomicInteger fail = new java.util.concurrent.atomic.AtomicInteger();
+    // 并发判定：每条含模型调用（数十秒），串行会线性累加；用有界线程池并发推进
+    List<java.util.concurrent.CompletableFuture<Void>> futures = new java.util.ArrayList<>();
+    for (Long examId : examIds) {
+      futures.add(java.util.concurrent.CompletableFuture.runAsync(() -> {
         try {
           assessService.assess(examId, null, null);
-          success++;
+          success.incrementAndGet();
         } catch (Exception ex) {
-          fail++;
+          fail.incrementAndGet();
           log.warn("批量判定失败 task={} exam={} err={}", taskId, examId, ex.getMessage());
         }
-      }
-      task.setStatus(BatchTaskStatus.SUCCESS.name());
-    } catch (Exception ex) {
-      task.setStatus(BatchTaskStatus.FAILED.name());
-      log.warn("批量任务失败 task={} err={}", taskId, ex.getMessage());
+      }, batchExecutor));
     }
-    task.setSuccess(success);
-    task.setFail(fail);
-    task.setUpdatedAt(LocalDateTime.now());
-    batchTaskMapper.updateById(task);
+    String finalStatus;
+    try {
+      java.util.concurrent.CompletableFuture
+          .allOf(futures.toArray(new java.util.concurrent.CompletableFuture[0]))
+          .orTimeout(30, java.util.concurrent.TimeUnit.MINUTES)
+          .join();
+      finalStatus = BatchTaskStatus.SUCCESS.name();
+    } catch (Exception ex) {
+      finalStatus = BatchTaskStatus.FAILED.name();
+      log.warn("批量任务异常结束 task={} err={}", taskId, ex.getMessage());
+    }
+    // 状态与计数一次性更新，避免多次写库
+    BatchTask update = new BatchTask();
+    update.setId(taskId);
+    update.setStatus(finalStatus);
+    update.setSuccess(success.get());
+    update.setFail(fail.get());
+    update.setUpdatedAt(LocalDateTime.now());
+    batchTaskMapper.updateById(update);
   }
 
   /** 导出 Excel：任务结果汇总。 */
