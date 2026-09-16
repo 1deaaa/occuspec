@@ -8,7 +8,7 @@
 
 1. [SSE 经过 Next.js rewrite 代理后失去流式](#1-sse-经过-nextjs-rewrite-代理后失去流式)
 2. [雪花 ID 超出 JS 安全整数导致"资源不存在"](#2-雪花-id-超出-js-安全整数导致资源不存在)
-3. [Sa-Token 内存会话：重启后端即掉登录态](#3-sa-token-内存会话重启后端即掉登录态)
+3. [Sa-Token 会话未持久化：重启后端即掉登录态](#3-sa-token-会话未持久化重启后端即掉登录态)
 4. [`@Transactional` 因自调用失效](#4-transactional-因自调用失效)
 5. [向量检索用不上 HNSW 索引](#5-向量检索用不上-hnsw-索引)
 6. [pgvector 维数上限导致的存储类型选择](#6-pgvector-维数上限导致的存储类型选择)
@@ -110,7 +110,7 @@ if (value > MAX_SAFE_INTEGER || value < -MAX_SAFE_INTEGER) {
 
 ---
 
-## 3. Sa-Token 内存会话：重启后端即掉登录态
+## 3. Sa-Token 会话未持久化：重启后端即掉登录态
 
 **症状**：后端重启后，浏览器里的旧 token 立即失效，
 所有接口报未登录；用户不知情，只看到请求失败。
@@ -124,21 +124,32 @@ if (value > MAX_SAFE_INTEGER || value < -MAX_SAFE_INTEGER) {
    确有 `setStringAndKeepTTL`；本机 Redis 版本 `redis_version:3.0.504`（2016 年），
    执行 `SET k v EX 60 KEEPTTL` 返回 `ERR syntax error`（该参数 Redis 6.0 才引入）。
 
-**根因**：会话存内存，进程重启即清空。属于环境限制（Redis 版本过旧），非代码缺陷。
+**根因**：会话存内存，进程重启即清空。属于**环境限制（Redis 版本过旧）**，非代码缺陷。
 
-**修复**：
+**当时的缓解**（现已不再需要）：
 - 后端：未登录改返回 **401 + JSON**（见下方"顺带修掉的"），而不是 500；
 - 前端：识别 401 时清除本地 token 并跳登录页，而不是静默失败；
-- 文档：在 `README.md` 与 `pom.xml` 注明升级路径（Redis ≥ 6.0 后换回 `sa-token-redis-jackson`）。
+- 文档：注明升级路径（Redis ≥ 6.0 后换回 `sa-token-redis-jackson`）。
+
+**最终修复**：升级到 Redis 8（Docker Compose 管理，见 `docker-compose.yml`），
+并在 `pom.xml` 重新引入 `sa-token-redis-jackson`，会话落 Redis。
+验证：登录拿 token → 重启后端 → **同一个 token 仍返回 200**；
+Redis 中可见 `satoken:login:token:*`、`satoken:login:session:*` 等键。
+（保留上述 401 处理：它不是权宜之计，而是正确的鉴权失败语义，仍然需要。）
 
 **顺带修掉的**：未登录时返回 500 而非 401。原因是 SSE 请求带
 `Accept: text/event-stream`，鉴权失败返回 JSON 时内容协商失败，
 抛出 `HttpMediaTypeNotAcceptableException`，把真实的"未登录"掩盖成"服务器错误"。
 改为 `ResponseEntity` 显式 `contentType(APPLICATION_JSON)` + 401。
 
-**经验**：项目实际用到的 Redis 命令（`SET EX` / `SETNX` / `SET NX EX` / `EXPIRE` /
-`INCR` / `EVAL` / `PING`）在 3.0.504 上逐个验证过，全部可用；
-**只有 Sa-Token 的可选会话持久化**受版本影响。部署到 Redis 6+ 环境即无此问题。
+**经验**：
+1. 项目实际用到的 Redis 命令（`SET EX` / `SETNX` / `SET NX EX` / `EXPIRE` /
+   `INCR` / `EVAL` / `PING`）在 3.0.504 上就能用，**只有 Sa-Token 的会话持久化**
+   需要 `KEEPTTL`（Redis 6.0+）。所以"项目能跑"不代表"依赖版本够新"，
+   要按**具体命令**判断而不是整块判断。
+2. 遇到环境版本限制时，"降级 + 文档注明升级路径"是可接受的过渡；
+   但一旦环境能升级，就该把降级项真的换回来，而不是长期留在注释里。
+   本次升级后 Redis 相关代码零改动，只有依赖与部署方式变了。
 
 ---
 

@@ -5,7 +5,7 @@
 > 与本地服务压测），给出复现命令，不引用估算值。
 >
 > 环境：Windows 11 / JDK 21.0.10 / MySQL 8.4 / PostgreSQL 18.4 + pgvector 0.8.1 /
-> Redis 3.0.504；Embedding 服务 SiliconFlow `Qwen/Qwen3-Embedding-8B`（dimensions=1024）。
+> Redis 8.10.1；Embedding 服务 SiliconFlow `Qwen/Qwen3-Embedding-8B`（dimensions=1024）。
 
 ## 1. 检索精确率：纯向量 vs 元数据过滤
 

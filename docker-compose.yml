@@ -1,0 +1,94 @@
+# 依赖中间件编排：MySQL（业务库）+ PostgreSQL/pgvector（向量库）+ Redis（缓存与会话）
+#
+# 用途：供部署时一键起依赖。本机若已自行安装这些服务，直接连本机即可，无需使用本文件。
+# 应用侧通过环境变量连接（见 .env.example），默认指向 127.0.0.1，因此两种方式都能直接跑。
+#
+# 用法：
+#   docker compose up -d          启动
+#   docker compose ps             查看状态
+#   docker compose logs -f redis  查看某个服务日志
+#   docker compose down           停止（保留数据卷）
+#   docker compose down -v        停止并删除数据卷（清空数据，慎用）
+#
+# 说明：
+# - 端口刻意用默认端口，与应用默认配置一致；如本机已占用，请改用其他端口并同步修改 .env。
+# - MySQL 首次启动会自动建库（MYSQL_DATABASE）；表结构由应用启动时的 Flyway 迁移创建。
+# - PostgreSQL 首次启动会自动建库（POSTGRES_DB），pgvector 扩展由 Flyway 迁移按需创建
+#   （V1 脚本含 CREATE EXTENSION IF NOT EXISTS vector）。
+# - 数据落在具名卷中，容器重建不丢数据。
+
+services:
+  mysql:
+    image: mysql:8.4
+    container_name: occuspec-mysql
+    restart: unless-stopped
+    environment:
+      MYSQL_ROOT_PASSWORD: ${MYSQL_PASSWORD:-1009}
+      MYSQL_DATABASE: ${MYSQL_DB:-occuspec}
+      TZ: Asia/Shanghai
+    command:
+      - --character-set-server=utf8mb4
+      - --collation-server=utf8mb4_unicode_ci
+      - --default-time-zone=+08:00
+    ports:
+      - "${MYSQL_PORT:-3306}:3306"
+    volumes:
+      - mysql-data:/var/lib/mysql
+    healthcheck:
+      # 用 root 密码探活；容器内已有 mysqladmin，无需额外依赖
+      test: ["CMD-SHELL", "mysqladmin ping -h 127.0.0.1 -uroot -p$$MYSQL_ROOT_PASSWORD --silent"]
+      interval: 10s
+      timeout: 5s
+      retries: 10
+      start_period: 30s
+
+  postgres:
+    # 官方 pgvector 镜像：已内置 vector 扩展，无需自行编译
+    image: pgvector/pgvector:pg18
+    container_name: occuspec-postgres
+    restart: unless-stopped
+    environment:
+      POSTGRES_USER: ${PG_USER:-postgres}
+      POSTGRES_PASSWORD: ${PG_PASSWORD:-1009}
+      POSTGRES_DB: ${PG_DB:-occuspec}
+      TZ: Asia/Shanghai
+    ports:
+      - "${PG_PORT:-5432}:5432"
+    volumes:
+      - pg-data:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U ${PG_USER:-postgres} -d ${PG_DB:-occuspec}"]
+      interval: 10s
+      timeout: 5s
+      retries: 10
+      start_period: 20s
+
+  redis:
+    # Redis 8：支持 SET ... KEEPTTL，Sa-Token 会话持久化依赖该命令
+    # （Redis 6 以下不支持，会导致会话只能存内存，见 docs/troubleshooting.md 第 3 条）
+    image: redis:8-alpine
+    container_name: occuspec-redis
+    restart: unless-stopped
+    command:
+      - redis-server
+      - --requirepass
+      - ${REDIS_PASSWORD:-1009}
+      - --appendonly
+      - "yes"
+    environment:
+      REDIS_PASSWORD: ${REDIS_PASSWORD:-1009}
+    ports:
+      - "${REDIS_PORT:-6379}:6379"
+    volumes:
+      - redis-data:/data
+    healthcheck:
+      test: ["CMD-SHELL", "redis-cli -a $$REDIS_PASSWORD ping | grep -q PONG"]
+      interval: 10s
+      timeout: 5s
+      retries: 10
+      start_period: 10s
+
+volumes:
+  mysql-data:
+  pg-data:
+  redis-data:

@@ -86,14 +86,19 @@
       <artifactId>flyway-database-postgresql</artifactId>
     </dependency>
 
-    <!-- 鉴权：Sa-Token + Redis 持久化 -->
+    <!-- 鉴权：Sa-Token -->
     <dependency>
       <groupId>cn.dev33</groupId>
       <artifactId>sa-token-spring-boot3-starter</artifactId>
       <version>${sa-token.version}</version>
     </dependency>
-    <!-- Sa-Token 会话：本地 Redis 3.x 不支持 1.46 的 SET KEEPTTL，先用内存会话保证可用 -->
-    <!-- 如需 Redis 持久化会话，请升级 Redis 至 6.0+ 后换回 sa-token-redis-jackson -->
+    <!-- 会话 Redis 持久化：Sa-Token 写入会话时会用 SET ... KEEPTTL（Redis 6.0+ 支持），
+         Redis 8 满足要求；不引入此依赖时会话只存内存，重启即掉登录态。 -->
+    <dependency>
+      <groupId>cn.dev33</groupId>
+      <artifactId>sa-token-redis-jackson</artifactId>
+      <version>${sa-token.version}</version>
+    </dependency>
     <dependency>
       <groupId>org.apache.commons</groupId>
       <artifactId>commons-pool2</artifactId>
