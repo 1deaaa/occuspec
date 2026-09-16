@@ -8,6 +8,7 @@ import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Input } from "@/components/ui/input";
 import { ScrollArea } from "@/components/ui/scroll-area";
 import { ReasoningFold } from "@/components/chat/reasoning-fold";
+import { MarkdownContent } from "@/components/chat/markdown-content";
 import { ToolTraceList } from "@/components/chat/tool-trace-list";
 import { UsageBar } from "@/components/chat/usage-bar";
 import { streamAssess, type StreamEvent } from "@/lib/api";
@@ -95,8 +96,8 @@ export default function AssessPage() {
         <ToolTraceList traces={traces} streaming={running && !done} />
         {(content || running) && (
           <Card>
-            <CardContent className="pt-4 text-sm leading-7 whitespace-pre-wrap">
-              <span className={running && !done ? "stream-caret" : ""}>{content}</span>
+            <CardContent className="pt-4">
+              <MarkdownContent isAnimating={running && !done}>{content}</MarkdownContent>
             </CardContent>
           </Card>
         )}

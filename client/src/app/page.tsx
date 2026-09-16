@@ -8,6 +8,7 @@ import { Button } from "@/components/ui/button";
 import { Textarea } from "@/components/ui/textarea";
 import { ScrollArea } from "@/components/ui/scroll-area";
 import { ReasoningFold } from "@/components/chat/reasoning-fold";
+import { MarkdownContent } from "@/components/chat/markdown-content";
 import { CitationList, ToolTraceList } from "@/components/chat/tool-trace-list";
 import { UsageBar } from "@/components/chat/usage-bar";
 import { useI18n } from "@/i18n/provider";
