@@ -51,17 +51,19 @@ class ApiFlowTest {
     String token = com.jayway.jsonpath.JsonPath.read(loginResp, "$.data.token");
 
     // 创建体检对象
+    // 雪花 ID 超出 JS 安全整数，后端按安全范围序列化为字符串（见 SafeLongSerializer）
     String personResp = mockMvc.perform(post("/persons")
             .header("satoken", token)
             .contentType(MediaType.APPLICATION_JSON)
             .content("{\"name\":\"测试员\",\"gender\":\"男\",\"company\":\"测试厂\",\"jobType\":\"打磨\",\"exposureHistory\":\"噪声3年\"}"))
         .andExpect(status().isOk())
         .andExpect(jsonPath("$.code").value(0))
+        .andExpect(jsonPath("$.data.personId").isString())
         .andReturn().getResponse().getContentAsString();
-    Number personId = com.jayway.jsonpath.JsonPath.read(personResp, "$.data.personId");
+    String personId = com.jayway.jsonpath.JsonPath.read(personResp, "$.data.personId");
 
     // 录入体检记录（听力偏高，触发噪声规则）
-    String examBody = "{\"personId\":" + personId + ",\"hazardCode\":\"gbz188-7-1\",\"examDate\":\"2026-09-01\","
+    String examBody = "{\"personId\":\"" + personId + "\",\"hazardCode\":\"gbz188-7-1\",\"examDate\":\"2026-09-01\","
         + "\"items\":[{\"itemCode\":\"hearing_avg_db\",\"itemName\":\"双耳高频平均听阈\",\"valueNum\":45,\"unit\":\"dB\"}]}";
     String examResp = mockMvc.perform(post("/exams")
             .header("satoken", token)
@@ -69,19 +71,20 @@ class ApiFlowTest {
             .content(examBody))
         .andExpect(status().isOk())
         .andExpect(jsonPath("$.code").value(0))
+        .andExpect(jsonPath("$.data.examId").isString())
         .andReturn().getResponse().getContentAsString();
-    Number examId = com.jayway.jsonpath.JsonPath.read(examResp, "$.data.examId");
+    String examId = com.jayway.jsonpath.JsonPath.read(examResp, "$.data.examId");
 
     // 同步判定：规则应命中职业禁忌证
     String assessResp = mockMvc.perform(post("/assessments")
             .header("satoken", token)
             .contentType(MediaType.APPLICATION_JSON)
-            .content("{\"examId\":" + examId + "}"))
+            .content("{\"examId\":\"" + examId + "\"}"))
         .andExpect(status().isOk())
         .andExpect(jsonPath("$.code").value(0))
         .andExpect(jsonPath("$.data.conclusion").value("OCCUPATIONAL_TABOO"))
         .andReturn().getResponse().getContentAsString();
-    Number assessmentId = com.jayway.jsonpath.JsonPath.read(assessResp, "$.data.assessmentId");
+    String assessmentId = com.jayway.jsonpath.JsonPath.read(assessResp, "$.data.assessmentId");
 
     // 报告查询：证据链非空且带复核声明
     mockMvc.perform(get("/assessments/" + assessmentId + "/report").header("satoken", token))
