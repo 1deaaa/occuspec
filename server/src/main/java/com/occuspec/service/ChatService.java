@@ -9,6 +9,7 @@ import com.occuspec.llm.LlmToolSpec;
 import com.occuspec.llm.LlmUsage;
 import com.occuspec.rag.ClauseRetrievalTools;
 import com.occuspec.rag.ClauseVectorStore;
+import com.occuspec.rag.RetrievalToolCatalog;
 import java.util.ArrayList;
 import java.util.HashMap;
 import java.util.LinkedHashMap;
@@ -33,11 +34,14 @@ public class ChatService {
 
   private final LlmGateway llmGateway;
   private final ClauseRetrievalTools retrievalTools;
+  private final RetrievalToolCatalog toolCatalog;
   private final ObjectMapper objectMapper;
 
-  public ChatService(LlmGateway llmGateway, ClauseRetrievalTools retrievalTools, ObjectMapper objectMapper) {
+  public ChatService(LlmGateway llmGateway, ClauseRetrievalTools retrievalTools,
+      RetrievalToolCatalog toolCatalog, ObjectMapper objectMapper) {
     this.llmGateway = llmGateway;
     this.retrievalTools = retrievalTools;
+    this.toolCatalog = toolCatalog;
     this.objectMapper = objectMapper;
   }
 
@@ -125,48 +129,9 @@ public class ChatService {
     return new ChatResult(answer.toString(), reasoning.toString(), dedup(citations), toolTraces, total, rounds);
   }
 
-  /** 工具声明：参数用文字说明可选值范围，实际合法值经元数据发现工具获取。 */
+  /** 工具声明：检索类工具统一来自 {@link RetrievalToolCatalog}（含动态枚举）。 */
   private List<LlmToolSpec> buildTools() {
-    List<LlmToolSpec> tools = new ArrayList<>();
-    tools.add(new LlmToolSpec("describe_metadata",
-        "列出可用的检索过滤维度及其取值分布。当你不确定危害因素编码、检查阶段等取值时，先调用本工具。",
-        Map.of("type", "object", "properties", Map.of(), "required", List.of())));
-    tools.add(new LlmToolSpec("clause_retrieve",
-        "按语义检索职业卫生标准条款。可选过滤维度：hazard（危害因素编码，取值见 describe_metadata）、"
-            + "phase（检查阶段：上岗前/在岗期间/离岗时/应急）、checkClass（必检/补充/选检）、"
-            + "standard（标准号，如 GBZ 188-2025）、appendixType（规范性/资料性）。不确定时不要传过滤条件。",
-        Map.of(
-            "type", "object",
-            "properties", Map.of(
-                "query", Map.of("type", "string", "description", "检索文本，用中文描述要查的内容"),
-                "topK", Map.of("type", "integer", "description", "返回条数，默认 6"),
-                "hazard", Map.of("type", "string", "description", "危害因素编码，可选"),
-                "phase", Map.of("type", "string", "description", "检查阶段，可选"),
-                "checkClass", Map.of("type", "string", "description", "检查类别，可选"),
-                "standard", Map.of("type", "string", "description", "标准号，可选"),
-                "appendixType", Map.of("type", "string", "description", "附录类型，可选")),
-            "required", List.of("query"))));
-    tools.add(new LlmToolSpec("clause_fetch",
-        "按标准号与条款编号精确获取条款原文。当你已知具体条款（如 GBZ 188-2025 的 7.1.1.1）时使用。",
-        Map.of(
-            "type", "object",
-            "properties", Map.of(
-                "standard", Map.of("type", "string", "description", "标准号"),
-                "clause", Map.of("type", "string", "description", "条款编号，如 7.1.1.1")),
-            "required", List.of("standard", "clause"))));
-    tools.add(new LlmToolSpec("clause_expand",
-        "沿条款引用链展开：取回该条款引用的其他条款（如\"同7.1.1.1\"、\"按GBZ 49\"、附录引用）。",
-        Map.of(
-            "type", "object",
-            "properties", Map.of("clauseId", Map.of("type", "integer", "description", "条款主键")),
-            "required", List.of("clauseId"))));
-    tools.add(new LlmToolSpec("hazard_route",
-        "按危害因素列出相关标准的节级条款清单，用于快速了解某危害因素涉及哪些标准。",
-        Map.of(
-            "type", "object",
-            "properties", Map.of("hazard", Map.of("type", "string", "description", "危害因素编码")),
-            "required", List.of("hazard"))));
-    return tools;
+    return toolCatalog.retrievalTools();
   }
 
   /** 工具执行结果。 */

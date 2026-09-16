@@ -77,6 +77,10 @@ public class AssessStreamController {
       done.put("conclusionLabel", view.conclusionLabel());
       done.put("evidences", view.evidences());
       done.put("recommendations", view.recommendations());
+      // Agent 决策元信息：轮次、是否被规则下限拦截、模型提交的依据
+      done.put("agentRounds", view.agentRounds());
+      done.put("floorApplied", view.floorApplied());
+      done.put("rationale", view.rationale() == null ? "" : view.rationale());
       send(emitter, "done", done);
       emitter.complete();
     } catch (Exception ex) {

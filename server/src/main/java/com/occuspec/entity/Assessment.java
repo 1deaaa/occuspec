@@ -15,6 +15,14 @@ public class Assessment {
   private String conclusion;
   private String conclusionSource;
   private String ruleVersion;
+  /** Agent 工具循环轮次。 */
+  private Integer agentRounds;
+  /** Agent 工具调用轨迹 JSON。 */
+  private String agentTraces;
+  /** Agent 推理过程摘要。 */
+  private String agentReasoning;
+  /** Agent 提交的判定依据。 */
+  private String rationale;
   private String reviewerId;
   private String reviewStatus;
   private String reviewComment;
@@ -36,6 +44,14 @@ public class Assessment {
   public void setConclusionSource(String conclusionSource) { this.conclusionSource = conclusionSource; }
   public String getRuleVersion() { return ruleVersion; }
   public void setRuleVersion(String ruleVersion) { this.ruleVersion = ruleVersion; }
+  public Integer getAgentRounds() { return agentRounds; }
+  public void setAgentRounds(Integer agentRounds) { this.agentRounds = agentRounds; }
+  public String getAgentTraces() { return agentTraces; }
+  public void setAgentTraces(String agentTraces) { this.agentTraces = agentTraces; }
+  public String getAgentReasoning() { return agentReasoning; }
+  public void setAgentReasoning(String agentReasoning) { this.agentReasoning = agentReasoning; }
+  public String getRationale() { return rationale; }
+  public void setRationale(String rationale) { this.rationale = rationale; }
   public String getReviewerId() { return reviewerId; }
   public void setReviewerId(String reviewerId) { this.reviewerId = reviewerId; }
   public String getReviewStatus() { return reviewStatus; }

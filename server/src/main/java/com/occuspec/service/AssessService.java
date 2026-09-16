@@ -7,15 +7,11 @@ import com.occuspec.entity.Assessment;
 import com.occuspec.entity.Evidence;
 import com.occuspec.entity.Recommendation;
 import com.occuspec.entity.Rule;
-import com.occuspec.enums.Conclusion;
-import com.occuspec.llm.LlmGateway;
-import com.occuspec.llm.LlmResult;
 import com.occuspec.mapper.AssessmentMapper;
 import com.occuspec.mapper.EvidenceMapper;
 import com.occuspec.mapper.ExamItemMapper;
 import com.occuspec.mapper.RecommendationMapper;
 import com.occuspec.mapper.RuleMapper;
-import com.occuspec.rag.ClauseRetrievalTools;
 import com.occuspec.rule.RuleEvaluator;
 import java.util.ArrayList;
 import java.util.HashMap;
@@ -29,16 +25,17 @@ import org.springframework.transaction.annotation.Transactional;
 
 /**
  * 判定编排深模块：小接口 assess(examId) 隐藏检索、规则、模型、落库全部细节。
- * 规则优先于模型输出；模型故障降级为纯规则结论，失败不抛穿。
+ *
+ * <p>判定由 Agent 驱动（见 {@link AssessAgentService}）：模型自主决定检索什么、过滤维度与轮次；
+ * 规则引擎结论作为不可下调的下限，由 Agent 层强制合并。
+ * 本类只负责：装配输入（快照→事实）、调用 Agent、事务落库（评估+证据+推荐）。
  */
 @Service
 public class AssessService {
   private static final Logger log = LoggerFactory.getLogger(AssessService.class);
   private final ExamService examService;
-  private final ClauseRetrievalTools retrievalTools;
+  private final AssessAgentService agentService;
   private final RuleMapper ruleMapper;
-  private final RuleEvaluator ruleEvaluator;
-  private final LlmGateway llmGateway;
   private final AssessmentMapper assessmentMapper;
   private final EvidenceMapper evidenceMapper;
   private final ExamItemMapper examItemMapper;
@@ -50,9 +47,8 @@ public class AssessService {
 
   public AssessService(
       ExamService examService,
-      ClauseRetrievalTools retrievalTools,
+      AssessAgentService agentService,
       RuleMapper ruleMapper,
-      LlmGateway llmGateway,
       AssessmentMapper assessmentMapper,
       EvidenceMapper evidenceMapper,
       ExamItemMapper examItemMapper,
@@ -62,10 +58,8 @@ public class AssessService {
       FieldMappingService fieldMappingService,
       ObjectMapper objectMapper) {
     this.examService = examService;
-    this.retrievalTools = retrievalTools;
+    this.agentService = agentService;
     this.ruleMapper = ruleMapper;
-    this.ruleEvaluator = new RuleEvaluator();
-    this.llmGateway = llmGateway;
     this.assessmentMapper = assessmentMapper;
     this.evidenceMapper = evidenceMapper;
     this.examItemMapper = examItemMapper;
@@ -83,52 +77,84 @@ public class AssessService {
     void onToolResult(String tool, int hits, String note);
   }
 
-  /** 同步判定：检索 → 规则 → 模型渲染 → 事务落库。 */
+  /** 判定：装配输入 → Agent 自主判定 → 事务落库。 */
   @Transactional
   public AssessResultView assess(Long examId, String ruleVersion, ProgressListener listener) {
     long start = System.currentTimeMillis();
     var snapshot = examService.snapshot(examId);
     String hazard = snapshot.exam().getHazardCode();
     Map<String, Object> facts = buildFacts(snapshot);
-    List<Map<String, Object>> toolCalls = new ArrayList<>();
+    emit(listener, "开始判定：危害因素 " + hazardName(hazard) + "，检查项 " + facts.size() + " 项");
 
-    emit(listener, "开始判定：危害因素 " + hazard + "，检查项 " + facts.size() + " 项");
-
-    // 1. 危害路由：适用标准与节级条款
-    var route = retrievalTools.route(hazard);
-    toolCalls.add(toMap(route.call()));
-    emitTool(listener, route.call());
-
-    // 2. 语义检索：按危害因素过滤；向量库覆盖不足时由工具层显式放宽并留痕。
-    // 查询文本使用中文危害名+检查项中文名，避免英文编码在中文向量空间失配。
-    String query = hazardName(hazard) + " 职业禁忌证 目标疾病 检查内容 " + String.join(" ", itemNames(snapshot));
-    var retrieval = retrievalTools.retrieve(query, 8,
-        new com.occuspec.rag.ClauseVectorStore.Filters(hazard, null, null, null, null));
-    toolCalls.add(toMap(retrieval.call()));
-    emitTool(listener, retrieval.call());
-    emit(listener, "召回条款 " + retrieval.clauses().size() + " 条，开始规则匹配");
-
-    // 3. 规则匹配：已按权重排序，首个命中即结论
+    // 规则下限：按危害因素取启用规则，交由 Agent 合并
     var rules = loadRules(hazard, ruleVersion);
     var specs = rules.stream()
         .map(r -> new RuleEvaluator.RuleSpec(r.getCode(), r.getExpression(), r.getConclusion(),
             r.getWeight() == null ? 0 : r.getWeight()))
         .toList();
-    var match = ruleEvaluator.firstMatch(specs, facts);
-    String conclusion = match == null ? Conclusion.NO_ABNORMALITY.name() : match.conclusion();
-    String matchedRule = match == null ? "DEFAULT" : match.ruleCode();
-    emit(listener, "规则命中：" + matchedRule + "，建议结论 " + labelOf(conclusion));
 
-    // 4. 模型渲染判定依据（失败降级为空，不抛穿）
-    LlmResult rendered = renderBasis(hazard, facts, retrieval.clauses(), conclusion, listener);
-    emit(listener, "依据渲染完成，落库保存证据链");
+    var input = new AssessAgentService.AssessInput(
+        hazard, hazardName(hazard), facts, specs, buildExamSummary(snapshot, facts));
+    var result = agentService.assess(input, new AssessAgentService.AgentProgress() {
+      @Override
+      public void onReasoning(String text) {
+        emit(listener, text);
+      }
 
-    // 5. 事务落库：评估 + 证据 + 推荐
-    AssessResultView view = persist(examId, snapshot, conclusion, matchedRule, retrieval,
-        rendered, toolCalls, start);
+      @Override
+      public void onToolCall(String tool, Map<String, Object> args) {
+        if (listener != null) {
+          listener.onToolCall(tool, args);
+        }
+      }
+
+      @Override
+      public void onToolResult(String tool, int hits, String note) {
+        if (listener != null) {
+          listener.onToolResult(tool, hits, note);
+        }
+      }
+    });
+
+    emit(listener, "落库保存证据链");
+    // 事务落库：评估 + 证据 + 推荐
+    List<Map<String, Object>> toolCalls = new ArrayList<>();
+    for (var t : result.traces()) {
+      Map<String, Object> map = new HashMap<>();
+      map.put("tool", t.tool());
+      map.put("args", t.args());
+      map.put("hits", t.hits());
+      map.put("note", t.note());
+      toolCalls.add(map);
+    }
+    String matchedRule = result.floorApplied() ? "RULE_FLOOR" : "AGENT";
+    AssessResultView view = persist(examId, snapshot, result, toolCalls, matchedRule, start);
     auditService.record("ASSESSMENT", String.valueOf(view.assessmentId()), snapshot.exam().getOperatorId(),
-        "提交判定", conclusion, System.currentTimeMillis() - start);
+        "提交判定", result.conclusion().name(), System.currentTimeMillis() - start);
     return view;
+  }
+
+  /** 检查项事实摘要：拼成文本供模型阅读。 */
+  private String buildExamSummary(ExamService.ExamSnapshot snapshot, Map<String, Object> facts) {
+    StringBuilder sb = new StringBuilder();
+    int i = 0;
+    for (var item : snapshot.items()) {
+      if (i++ > 0) {
+        sb.append("；");
+      }
+      sb.append(item.getItemName() == null || item.getItemName().isBlank()
+          ? item.getItemCode() : item.getItemName());
+      sb.append("=");
+      if (item.getValueNum() != null) {
+        sb.append(item.getValueNum().stripTrailingZeros().toPlainString());
+      } else {
+        sb.append(item.getValueText() == null ? "" : item.getValueText());
+      }
+      if (item.getUnit() != null && !item.getUnit().isBlank()) {
+        sb.append(" ").append(item.getUnit());
+      }
+    }
+    return sb.toString();
   }
 
   private Map<String, Object> buildFacts(ExamService.ExamSnapshot snapshot) {
@@ -150,19 +176,6 @@ public class AssessService {
     return hazardService.nameOf(hazardCode);
   }
 
-  /** 检查项中文名列表：拼入向量查询文本。 */
-  private List<String> itemNames(ExamService.ExamSnapshot snapshot) {
-    List<String> names = new ArrayList<>();
-    for (var item : snapshot.items()) {
-      if (item.getItemName() != null && !item.getItemName().isBlank()) {
-        names.add(item.getItemName());
-      } else {
-        names.add(item.getItemCode());
-      }
-    }
-    return names;
-  }
-
   private List<Rule> loadRules(String hazard, String ruleVersion) {
     var wrapper = new LambdaQueryWrapper<Rule>().eq(Rule::getEnabled, true);
     if (hazard != null && !hazard.isBlank()) {
@@ -175,42 +188,9 @@ public class AssessService {
     return ruleMapper.selectList(wrapper);
   }
 
-  private LlmResult renderBasis(String hazard, Map<String, Object> facts,
-      List<ClauseRetrievalTools.RetrievedClause> clauses, String conclusion, ProgressListener listener) {
-    try {
-      StringBuilder prompt = new StringBuilder();
-      prompt.append("你是职业健康检查辅助判定助手，只做建议性表述，不得使用确诊措辞。\n");
-      prompt.append("危害因素：").append(hazardName(hazard)).append("\n检查项：").append(facts).append("\n");
-      prompt.append("适用条款：\n");
-      for (var c : clauses.subList(0, Math.min(5, clauses.size()))) {
-        prompt.append("- ").append(c.standardCode()).append(" ").append(c.clauseNo())
-            .append(" ").append(c.title()).append("（第 ").append(c.pageNo()).append(" 页）\n");
-      }
-      prompt.append("规则建议结论：").append(labelOf(conclusion)).append("\n");
-      prompt.append("请用 3 句话说明判定依据，每句引用条款编号。");
-      StringBuilder buf = new StringBuilder();
-      final long[] usage = new long[3];
-      llmGateway.stream(prompt.toString(), buf::append, thinking -> {
-        if (listener != null) {
-          listener.onReasoning(thinking);
-        }
-      }, u -> {
-        usage[0] = u.promptTokens();
-        usage[1] = u.completionTokens();
-        usage[2] = u.totalTokens();
-      });
-      String text = buf.toString();
-      return new com.occuspec.llm.LlmResult(text,
-          new com.occuspec.llm.LlmUsage(usage[0], usage[1], usage[2]), false, null);
-    } catch (Exception ex) {
-      log.warn("依据渲染降级 err={}", ex.getMessage());
-      return com.occuspec.llm.LlmResult.degraded("");
-    }
-  }
-
-  private AssessResultView persist(Long examId, ExamService.ExamSnapshot snapshot, String conclusion,
-      String matchedRule, ClauseRetrievalTools.RetrievalResult retrieval, LlmResult rendered,
-      List<Map<String, Object>> toolCalls, long start) {
+  private AssessResultView persist(Long examId, ExamService.ExamSnapshot snapshot,
+      AssessAgentService.AgentResult result, List<Map<String, Object>> toolCalls,
+      String matchedRule, long start) {
     // 输入快照：可复现
     String snapshotJson;
     try {
@@ -226,18 +206,26 @@ public class AssessService {
     Assessment assessment = new Assessment();
     assessment.setExamId(examId);
     assessment.setInputSnapshot(snapshotJson);
-    assessment.setConclusion(conclusion);
-    assessment.setConclusionSource(rendered.degraded() ? "RULE" : "LLM");
+    assessment.setConclusion(result.conclusion().name());
+    // 结论来源：AGENT（模型提交）/ RULE_FLOOR（模型被下限拦截）/ RULE_FALLBACK（模型不可用）
+    assessment.setConclusionSource(result.decisionSource());
     assessment.setRuleVersion(matchedRule);
+    // Agent 决策轨迹：轮次、工具序列、推理摘要与依据，供审计回放
+    assessment.setAgentRounds(result.rounds());
+    assessment.setAgentTraces(toJson(toolCalls));
+    assessment.setAgentReasoning(head(result.reasoning(), 8000));
+    assessment.setRationale(head(result.rationale(), 4000));
     assessment.setReviewStatus("PENDING");
-    assessment.setPromptTokens(rendered.usage().promptTokens());
-    assessment.setCompletionTokens(rendered.usage().completionTokens());
-    assessment.setTotalTokens(rendered.usage().totalTokens());
+    assessment.setPromptTokens(result.usage().promptTokens());
+    assessment.setCompletionTokens(result.usage().completionTokens());
+    assessment.setTotalTokens(result.usage().totalTokens());
     assessment.setCostMs(System.currentTimeMillis() - start);
     assessmentMapper.insert(assessment);
 
+    // 证据链：优先落模型引用的条款；模型未引用时回退到检索工具召回的前若干条
+    List<AssessAgentService.CitedClause> cited = result.citations();
     List<AssessResultView.EvidenceView> evidenceViews = new ArrayList<>();
-    for (var c : retrieval.clauses().subList(0, Math.min(5, retrieval.clauses().size()))) {
+    for (var c : cited) {
       Evidence evidence = new Evidence();
       evidence.setAssessmentId(assessment.getId());
       evidence.setClauseId(c.clauseId());
@@ -245,13 +233,13 @@ public class AssessService {
       evidence.setClauseNo(c.clauseNo());
       evidence.setQuote(head(c.quote(), 1500));
       evidence.setItemCode("");
-      evidence.setReason("适用条款召回（" + c.source() + "）");
+      evidence.setReason("Agent 引用（" + c.source() + "）");
       evidenceMapper.insert(evidence);
       evidenceViews.add(new AssessResultView.EvidenceView(c.standardCode(), c.clauseNo(),
           head(c.quote(), 600), "", evidence.getReason(), c.pageNo()));
     }
 
-    // 推荐：标准内推荐（附录 C 关联）与机构扩展分开
+    // 推荐：标准内推荐（来自引用条款）与机构扩展分开
     List<AssessResultView.RecommendationView> recViews = new ArrayList<>();
     Recommendation std = new Recommendation();
     std.setAssessmentId(assessment.getId());
@@ -259,15 +247,16 @@ public class AssessService {
     std.setItemName("按条款要求复查");
     std.setReason("来自适用条款的检查要求");
     std.setExtended(false);
-    std.setSourceClauseNo(retrieval.clauses().isEmpty() ? "" : retrieval.clauses().get(0).clauseNo());
+    std.setSourceClauseNo(cited.isEmpty() ? "" : cited.get(0).clauseNo());
     recommendationMapper.insert(std);
     recViews.add(new AssessResultView.RecommendationView(std.getItemCode(), std.getItemName(),
         std.getReason(), false, std.getSourceClauseNo()));
 
-    return new AssessResultView(assessment.getId(), examId, conclusion, labelOf(conclusion),
-        assessment.getConclusionSource(), evidenceViews, recViews, toolCalls,
-        assessment.getPromptTokens(), assessment.getCompletionTokens(), assessment.getTotalTokens(),
-        assessment.getCostMs());
+    return new AssessResultView(assessment.getId(), examId, result.conclusion().name(),
+        result.conclusion().getLabel(), assessment.getConclusionSource(), evidenceViews, recViews,
+        toolCalls, assessment.getPromptTokens(), assessment.getCompletionTokens(),
+        assessment.getTotalTokens(), assessment.getCostMs(), result.rounds(),
+        result.floorApplied(), result.rationale());
   }
 
   private void emit(ProgressListener listener, String text) {
@@ -276,34 +265,21 @@ public class AssessService {
     }
   }
 
-  private void emitTool(ProgressListener listener, ClauseRetrievalTools.ToolCall call) {
-    if (listener != null) {
-      listener.onToolCall(call.tool(), call.args());
-      listener.onToolResult(call.tool(), call.hits(), call.note());
-    }
-  }
-
-  private Map<String, Object> toMap(ClauseRetrievalTools.ToolCall call) {
-    Map<String, Object> map = new HashMap<>();
-    map.put("tool", call.tool());
-    map.put("args", call.args());
-    map.put("hits", call.hits());
-    map.put("note", call.note());
-    return map;
-  }
-
-  private String labelOf(String conclusion) {
-    try {
-      return Conclusion.valueOf(conclusion).getLabel();
-    } catch (Exception e) {
-      return conclusion;
-    }
-  }
-
   private String head(String text, int max) {
     if (text == null) {
       return "";
     }
     return text.length() > max ? text.substring(0, max) : text;
+  }
+
+  private String toJson(Object value) {
+    if (value == null) {
+      return null;
+    }
+    try {
+      return objectMapper.writeValueAsString(value);
+    } catch (Exception e) {
+      return null;
+    }
   }
 }

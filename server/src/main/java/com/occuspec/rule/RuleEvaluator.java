@@ -16,6 +16,57 @@ public class RuleEvaluator {
   /** 单条规则命中结果。 */
   public record Match(String ruleCode, String conclusion, int weight) {}
 
+  /** 带命中细节的结果：供 Agent 了解"哪些事实触发了该规则"。 */
+  public record DetailedMatch(
+      String ruleCode, String conclusion, int weight, List<String> matchedFacts, List<Condition> conditions) {}
+
+  /** 命中的单个条件。 */
+  public record Condition(String fact, String op, String expected, String actual) {}
+
+  /**
+   * 对一组规则按顺序求值，返回首个命中的规则及其命中细节。
+   *
+   * @param rules 规则表达式与结论（调用方已按危害因素过滤并按权重排序）
+   * @param facts 事实表：检查项编码 → 数值/文本
+   */
+  public DetailedMatch firstMatchDetailed(List<RuleSpec> rules, Map<String, Object> facts) {
+    for (RuleSpec rule : rules) {
+      if (!matches(rule.expression(), facts)) {
+        continue;
+      }
+      List<String> matchedFacts = new ArrayList<>();
+      List<Condition> conditions = new ArrayList<>();
+      try {
+        JsonNode root = MAPPER.readTree(rule.expression());
+        for (JsonNode cond : root.path("all")) {
+          collectCondition(cond, facts, matchedFacts, conditions);
+        }
+        for (JsonNode cond : root.path("any")) {
+          collectCondition(cond, facts, matchedFacts, conditions);
+        }
+      } catch (Exception ignored) {
+        // 表达式解析失败不影响命中结论
+      }
+      return new DetailedMatch(rule.code(), rule.conclusion(), rule.weight(), matchedFacts, conditions);
+    }
+    return null;
+  }
+
+  private void collectCondition(
+      JsonNode cond, Map<String, Object> facts, List<String> matchedFacts, List<Condition> conditions) {
+    String fact = cond.path("fact").asText("");
+    if (fact.isBlank()) {
+      return;
+    }
+    Object actual = facts.get(fact);
+    if (actual == null) {
+      return;
+    }
+    matchedFacts.add(fact);
+    conditions.add(new Condition(fact, cond.path("op").asText("=="),
+        cond.path("value").toString(), String.valueOf(actual)));
+  }
+
   /**
    * 对一组规则按权重从高到低求值，返回首个命中的规则。
    *

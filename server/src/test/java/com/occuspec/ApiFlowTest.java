@@ -61,7 +61,7 @@ class ApiFlowTest {
     Number personId = com.jayway.jsonpath.JsonPath.read(personResp, "$.data.personId");
 
     // 录入体检记录（听力偏高，触发噪声规则）
-    String examBody = "{\"personId\":" + personId + ",\"hazardCode\":\"noise\",\"examDate\":\"2026-09-01\","
+    String examBody = "{\"personId\":" + personId + ",\"hazardCode\":\"gbz188-7-1\",\"examDate\":\"2026-09-01\","
         + "\"items\":[{\"itemCode\":\"hearing_avg_db\",\"itemName\":\"双耳高频平均听阈\",\"valueNum\":45,\"unit\":\"dB\"}]}";
     String examResp = mockMvc.perform(post("/exams")
             .header("satoken", token)
