@@ -45,6 +45,7 @@ public class AssessService {
   private final RecommendationMapper recommendationMapper;
   private final AuditService auditService;
   private final HazardService hazardService;
+  private final FieldMappingService fieldMappingService;
   private final ObjectMapper objectMapper;
 
   public AssessService(
@@ -58,6 +59,7 @@ public class AssessService {
       RecommendationMapper recommendationMapper,
       AuditService auditService,
       HazardService hazardService,
+      FieldMappingService fieldMappingService,
       ObjectMapper objectMapper) {
     this.examService = examService;
     this.retrievalTools = retrievalTools;
@@ -70,6 +72,7 @@ public class AssessService {
     this.recommendationMapper = recommendationMapper;
     this.auditService = auditService;
     this.hazardService = hazardService;
+    this.fieldMappingService = fieldMappingService;
     this.objectMapper = objectMapper;
   }
 
@@ -137,7 +140,9 @@ public class AssessService {
         facts.put(item.getItemCode(), item.getValueText());
       }
     }
-    return facts;
+    // 字段归一化：外部报告字段名可能是中文名或机构自定义列名，
+    // 经别名映射补出规范 fact 编码键，规则表达式才能稳定命中。
+    return fieldMappingService.canonicalizeFacts(facts);
   }
 
   /** 危害中文名：查库获取，新增危害因素无需改代码。 */
