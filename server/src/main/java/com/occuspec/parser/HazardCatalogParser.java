@@ -78,6 +78,9 @@ public class HazardCatalogParser {
       name = name.substring(0, parenIdx);
     }
     name = name.replaceAll("\\s+", " ").trim();
+    // Markdown 斜体标记残留：源文把连字符写成 "_-_"（如 "β _-_ 萘胺"），归一化为标准连字符
+    name = name.replaceAll("\\s*_-_\\s*", "-");
+    name = name.replaceAll("\\s*_\\s*", " ");
     // 名称过长时按首个顿号截断，保留主名称
     if (name.length() > 60 && name.contains("、")) {
       name = name.substring(0, name.indexOf('、'));
