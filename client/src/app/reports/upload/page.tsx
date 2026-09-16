@@ -1,6 +1,6 @@
 "use client";
 
-import { useEffect, useRef, useState } from "react";
+import { useCallback, useEffect, useRef, useState } from "react";
 import { AlertTriangle, CheckCircle2, FileUp, ShieldCheck } from "lucide-react";
 
 import { Badge } from "@/components/ui/badge";
@@ -65,17 +65,20 @@ export default function ReportUploadPage() {
   const [busy, setBusy] = useState(false);
   const fileRef = useRef<HTMLInputElement>(null);
 
+  const reloadRecent = useCallback(
+    () =>
+      apiFetch<{ data: UploadRow[] }>("/report-uploads?limit=10")
+        .then((data) => setRecent(data.data ?? []))
+        .catch(() => setRecent([])),
+    [],
+  );
+
   useEffect(() => {
     apiFetch<{ data: Hazard[] }>("/hazards")
       .then((data) => setHazards(data.data ?? []))
       .catch(() => setHazards([]));
     reloadRecent();
-  }, []);
-
-  const reloadRecent = () =>
-    apiFetch<{ data: UploadRow[] }>("/report-uploads?limit=10")
-      .then((data) => setRecent(data.data ?? []))
-      .catch(() => setRecent([]));
+  }, [reloadRecent]);
 
   /** 上传并抽取：仅生成草稿，不写体检数据。 */
   const upload = async () => {
