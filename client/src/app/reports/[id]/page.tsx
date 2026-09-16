@@ -8,11 +8,11 @@ import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { ScrollArea } from "@/components/ui/scroll-area";
 import { UsageBar } from "@/components/chat/usage-bar";
-import { apiFetch } from "@/lib/api";
+import { apiFetch, type SnowflakeId } from "@/lib/api";
 import { useI18n } from "@/i18n/provider";
 
 interface Report {
-  assessmentId: number;
+  assessmentId: SnowflakeId;
   conclusionLabel: string;
   conclusionSource: string;
   reviewStatus: string;

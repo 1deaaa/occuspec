@@ -127,16 +127,21 @@ public class AssessAgentService {
     int rounds = 0;
     for (int round = 0; round < MAX_ROUNDS; round++) {
       rounds++;
-      LlmToolResponse response = llmGateway.completeWithTools(messages, tools);
+      // 流式调用：推理与正文逐增量推送；工具调用（含终止工具）整轮结束后返回
+      LlmToolResponse response = llmGateway.streamWithTools(
+          messages, tools,
+          delta -> answer.append(delta),
+          delta -> {
+            reasoning.append(delta);
+            if (progress != null) {
+              progress.onReasoning(delta);
+            }
+          });
       total = total.add(response.usage());
       if (response.degraded()) {
         degraded = true;
         emit(progress, "模型不可用，降级为规则结论");
         break;
-      }
-      appendReasoning(response, reasoning, progress);
-      if (response.content() != null && !response.content().isBlank()) {
-        answer.append(response.content());
       }
       if (!response.hasToolCalls()) {
         // 模型直接给出文字而未提交结构化结论：视为未提交，走降级
@@ -365,15 +370,6 @@ public class AssessAgentService {
           "function", Map.of("name", call.name(), "arguments", call.arguments())));
     }
     return toJson(rows);
-  }
-
-  private void appendReasoning(LlmToolResponse response, StringBuilder reasoning, AgentProgress progress) {
-    if (response.reasoning() != null && !response.reasoning().isBlank()) {
-      reasoning.append(response.reasoning());
-      if (progress != null) {
-        progress.onReasoning(response.reasoning());
-      }
-    }
   }
 
   private String defaultAnswer(Conclusion conclusion, boolean floorApplied, boolean modelMissing) {

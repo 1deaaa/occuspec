@@ -1,6 +1,7 @@
 "use client";
 
 import { useCallback, useEffect, useRef, useState } from "react";
+import { useRouter } from "next/navigation";
 import { CornerDownLeft, MessageSquarePlus, Square } from "lucide-react";
 
 import { Button } from "@/components/ui/button";
@@ -11,11 +12,14 @@ import { CitationList, ToolTraceList } from "@/components/chat/tool-trace-list";
 import { UsageBar } from "@/components/chat/usage-bar";
 import { useI18n } from "@/i18n/provider";
 import {
+  ApiError,
   apiFetch,
+  clearToken,
   streamChat,
   type ChatMessageView,
   type ChatSessionView,
   type Citation,
+  type SnowflakeId,
   type ToolTrace,
 } from "@/lib/api";
 import { cn } from "@/lib/utils";
@@ -47,8 +51,9 @@ interface Message {
 
 export default function ChatPage() {
   const { t } = useI18n();
+  const router = useRouter();
   const [sessions, setSessions] = useState<ChatSessionView[]>([]);
-  const [sessionId, setSessionId] = useState<number | null>(null);
+  const [sessionId, setSessionId] = useState<SnowflakeId | null>(null);
   const [messages, setMessages] = useState<Message[]>([]);
   const [input, setInput] = useState("");
   const [streaming, setStreaming] = useState(false);
@@ -72,7 +77,7 @@ export default function ChatPage() {
     bottomRef.current?.scrollIntoView({ behavior: "smooth", block: "end" });
   }, [messages]);
 
-  const openSession = async (id: number) => {
+  const openSession = async (id: SnowflakeId) => {
     setSessionId(id);
     try {
       const data = await apiFetch<{ data: ChatMessageView[] }>(`/chat/sessions/${id}/messages`);
@@ -152,7 +157,13 @@ export default function ChatPage() {
         abort.signal,
       );
     } catch (error) {
-      const message = error instanceof Error ? error.message : "对话失败";
+      // 登录态失效：清理本地 token 并跳登录，避免只留一个静默失败
+      if (error instanceof ApiError && (error.code === 40101 || error.code === 401)) {
+        clearToken();
+        router.push("/login");
+        return;
+      }
+      const message = error instanceof Error ? error.message : t("chat.failed");
       patchLast((m) => ({ ...m, streaming: false, content: m.content || message }));
     } finally {
       patchLast((m) => ({ ...m, streaming: false }));
@@ -230,8 +241,10 @@ export default function ChatPage() {
                           <ReasoningFold text={message.reasoning} streaming={message.streaming} />
                           <ToolTraceList traces={message.toolTraces} streaming={message.streaming} />
                           {(message.content || message.streaming) && (
-                            <div className="border bg-card p-3 text-sm leading-7 whitespace-pre-wrap">
-                              <span className={message.streaming ? "stream-caret" : ""}>{message.content}</span>
+                            <div className="border bg-card p-3">
+                              <MarkdownContent isAnimating={message.streaming}>
+                                {message.content}
+                              </MarkdownContent>
                             </div>
                           )}
                           <CitationList citations={message.citations} />

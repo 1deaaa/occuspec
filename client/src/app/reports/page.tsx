@@ -6,12 +6,12 @@ import { FileText } from "lucide-react";
 import { Badge } from "@/components/ui/badge";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { ScrollArea } from "@/components/ui/scroll-area";
-import { apiFetch } from "@/lib/api";
+import { apiFetch, type SnowflakeId } from "@/lib/api";
 import { useI18n } from "@/i18n/provider";
 
 interface Row {
-  assessmentId: number;
-  examId: number;
+  assessmentId: SnowflakeId;
+  examId: SnowflakeId;
   conclusion: string;
   conclusionLabel: string;
   reviewStatus: string;

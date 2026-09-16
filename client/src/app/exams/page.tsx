@@ -7,7 +7,7 @@ import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Input } from "@/components/ui/input";
 import { ScrollArea } from "@/components/ui/scroll-area";
-import { apiFetch } from "@/lib/api";
+import { apiFetch, type SnowflakeId } from "@/lib/api";
 import { useI18n } from "@/i18n/provider";
 
 interface Hazard {
@@ -69,11 +69,11 @@ export default function ExamsPage() {
     }
     setSubmitting(true);
     try {
-      const person = await apiFetch<{ personId: number }>("/persons", {
+      const person = await apiFetch<{ personId: SnowflakeId }>("/persons", {
         method: "POST",
         body: JSON.stringify({ name: name || t("exam.anonymous"), exposureHistory: hazardCode }),
       });
-      const exam = await apiFetch<{ examId: number }>("/exams", {
+      const exam = await apiFetch<{ examId: SnowflakeId }>("/exams", {
         method: "POST",
         headers: { "Idempotency-Key": `exam-${Date.now()}` },
         body: JSON.stringify({

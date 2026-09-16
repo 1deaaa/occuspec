@@ -3,6 +3,9 @@ module.exports = {
   darkMode: ["class"],
   content: [
     "./src/**/*.{js,ts,jsx,tsx,mdx}",
+    // Streamdown 在运行时拼装 class（如 bg-sidebar、border-border），
+    // 不扫描其产物会导致这些类被 Tailwind 裁掉，Markdown 渲染缺样式
+    "./node_modules/streamdown/dist/**/*.{js,mjs}",
   ],
   theme: {
     extend: {
@@ -39,6 +42,10 @@ module.exports = {
         card: {
           DEFAULT: "hsl(var(--card))",
           foreground: "hsl(var(--card-foreground))",
+        },
+        sidebar: {
+          DEFAULT: "hsl(var(--sidebar))",
+          foreground: "hsl(var(--sidebar-foreground))",
         },
       },
       borderRadius: {

@@ -84,19 +84,25 @@ public class ChatService {
     int rounds = 0;
     for (int round = 0; round < MAX_ROUNDS; round++) {
       rounds++;
-      LlmToolResponse response = llmGateway.completeWithTools(messages, tools);
+      // 流式调用：正文与推理逐增量推送，工具调用整轮结束后返回
+      LlmToolResponse response = llmGateway.streamWithTools(
+          messages, tools,
+          delta -> {
+            answer.append(delta);
+            if (progress != null) {
+              progress.onContent(delta);
+            }
+          },
+          delta -> {
+            reasoning.append(delta);
+            if (progress != null) {
+              progress.onReasoning(delta);
+            }
+          });
       total = total.add(response.usage());
-      if (response.reasoning() != null && !response.reasoning().isBlank()) {
-        reasoning.append(response.reasoning());
-        if (progress != null) {
-          progress.onReasoning(response.reasoning());
-        }
-      }
-      if (response.content() != null && !response.content().isBlank()) {
-        answer.append(response.content());
-        if (progress != null) {
-          progress.onContent(response.content());
-        }
+      // 流中已增量回调，此处不再重复推送正文与推理（仅做累计兜底）
+      if (response.degraded()) {
+        break;
       }
       if (!response.hasToolCalls()) {
         break;

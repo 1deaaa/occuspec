@@ -16,4 +16,10 @@ public record ApiResponse<T>(int code, String message, T data, Object details) {
   public static <T> ApiResponse<T> fail(ErrorCode error) {
     return fail(error, null);
   }
+
+  /** 自定义提示语：用于需要更具体说明的错误（如"登录已失效"）。 */
+  public static <T> ApiResponse<T> fail(ErrorCode error, String message, Object details) {
+    return new ApiResponse<>(error.getCode(),
+        message == null || message.isBlank() ? error.getMessage() : message, null, details);
+  }
 }

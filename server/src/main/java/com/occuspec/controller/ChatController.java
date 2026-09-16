@@ -36,12 +36,17 @@ public class ChatController {
   private final ChatService chatService;
   private final ChatSessionService sessionService;
   private final ObjectMapper objectMapper;
+  /** 判定专用线程池：对话与判定同为长耗时模型调用，共用同一隔离池。 */
+  private final java.util.concurrent.Executor assessExecutor;
 
   public ChatController(
-      ChatService chatService, ChatSessionService sessionService, ObjectMapper objectMapper) {
+      ChatService chatService, ChatSessionService sessionService, ObjectMapper objectMapper,
+      @org.springframework.beans.factory.annotation.Qualifier("assessExecutor")
+          java.util.concurrent.Executor assessExecutor) {
     this.chatService = chatService;
     this.sessionService = sessionService;
     this.objectMapper = objectMapper;
+    this.assessExecutor = assessExecutor;
   }
 
   /** 会话列表。 */
@@ -92,9 +97,9 @@ public class ChatController {
       sessionId = sessionService.createSession(truncate(input, 60), userId).getId();
     }
     final long sid = sessionId;
-    SseEmitter emitter = new SseEmitter(180_000L);
-    AtomicReference<String> startedAt = new AtomicReference<>(String.valueOf(System.currentTimeMillis()));
-    CompletableFuture.runAsync(() -> {
+    // 超时 15 分钟：对话实测数十秒至数分钟，留足余量
+    SseEmitter emitter = new SseEmitter(900_000L);
+    assessExecutor.execute(() -> {
       try {
         sessionService.saveUserMessage(sid, input);
         send(emitter, "session", Map.of("sessionId", sid));

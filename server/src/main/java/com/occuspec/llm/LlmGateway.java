@@ -2,7 +2,6 @@ package com.occuspec.llm;
 
 import java.util.List;
 import java.util.function.Consumer;
-
 /**
  * 大模型网关深模块：小接口隐藏超时、重试、降级细节。
  * 失败不得抛穿到接口层，统一返回降级结果。
@@ -45,4 +44,21 @@ public interface LlmGateway {
    * @param tools 可用工具声明（可为空表示纯对话）
    */
   LlmToolResponse completeWithTools(List<ChatMsg> messages, List<LlmToolSpec> tools);
+
+  /**
+   * 带工具的流式补全：正文与推理逐增量回调，工具调用在整轮结束后整体返回。
+   *
+   * <p>为什么工具调用不能流式：OpenAI 兼容协议的 tool_calls 是分片累积的
+   * （id/name 只在首片出现，arguments 跨多片拼接），必须等整轮结束才能拿到可执行的参数。
+   * 但同一轮里的正文与推理是连续的 token 流，可以实时推送——这正是"边想边显示"的来源。
+   *
+   * @param onContent 正文增量回调（可空）
+   * @param onReasoning 推理增量回调（可空）
+   * @return 聚合后的整轮结果（正文、推理、工具调用、用量）
+   */
+  default LlmToolResponse streamWithTools(
+      List<ChatMsg> messages, List<LlmToolSpec> tools,
+      Consumer<String> onContent, Consumer<String> onReasoning) {
+    return completeWithTools(messages, tools);
+  }
 }

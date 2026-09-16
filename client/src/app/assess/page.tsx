@@ -33,7 +33,8 @@ export default function AssessPage() {
     setDone(null);
     setError("");
     try {
-      await streamAssess(Number(examId), (event: StreamEvent) => {
+      // examId 为雪花 ID 字符串，直接透传避免 Number 转换丢精度
+      await streamAssess(examId, (event: StreamEvent) => {
         if (event.type === "reasoning") {
           setReasoning((prev) => prev + event.text);
         } else if (event.type === "tool_call") {

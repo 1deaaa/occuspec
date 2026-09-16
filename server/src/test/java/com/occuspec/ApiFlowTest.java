@@ -35,7 +35,7 @@ class ApiFlowTest {
   @Test
   void 未登录访问受保护接口被拒绝() throws Exception {
     mockMvc.perform(get("/hazards"))
-        .andExpect(status().isOk())
+        .andExpect(status().isUnauthorized())
         .andExpect(jsonPath("$.code").value(40101));
   }
 

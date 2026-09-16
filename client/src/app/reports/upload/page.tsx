@@ -8,7 +8,7 @@ import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Input } from "@/components/ui/input";
 import { ScrollArea } from "@/components/ui/scroll-area";
-import { apiFetch } from "@/lib/api";
+import { apiFetch, type SnowflakeId } from "@/lib/api";
 import { useI18n } from "@/i18n/provider";
 
 interface Hazard {
@@ -29,22 +29,22 @@ interface ExtractedItem {
 }
 
 interface UploadView {
-  uploadId: number;
+  uploadId: SnowflakeId;
   fileName: string;
   status: string;
   extractNote: string;
-  examId: number | null;
-  personId: number | null;
+  examId: SnowflakeId | null;
+  personId: SnowflakeId | null;
   hazardCode: string;
   items: ExtractedItem[];
 }
 
 interface UploadRow {
-  uploadId: number;
+  uploadId: SnowflakeId;
   fileName: string;
   status: string;
   hazardCode: string;
-  personId: number | null;
+  personId: SnowflakeId | null;
   extractNote: string;
   createdAt: string;
 }
@@ -149,10 +149,11 @@ export default function ReportUploadPage() {
     setMessage("");
     setBusy(true);
     try {
-      const data = await apiFetch<{ examId: number }>(`/report-uploads/${view.uploadId}/import`, {
+      const data = await apiFetch<{ examId: SnowflakeId }>(`/report-uploads/${view.uploadId}/import`, {
         method: "POST",
         body: JSON.stringify({
-          personId: personId ? Number(personId) : view.personId,
+          // personId 为雪花 ID 字符串，不做 Number 转换
+          personId: personId || view.personId,
           examDate,
         }),
       });

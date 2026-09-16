@@ -11,7 +11,9 @@ import java.net.http.HttpResponse;
 import java.nio.charset.StandardCharsets;
 import java.time.Duration;
 import java.util.ArrayList;
+import java.util.LinkedHashMap;
 import java.util.List;
+import java.util.Map;
 import java.util.function.Consumer;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
@@ -191,41 +193,168 @@ public class OpenAiCompatLlmGateway implements LlmGateway {
   @Override
   public LlmToolResponse completeWithTools(List<ChatMsg> messages, List<LlmToolSpec> tools) {
     try {
-      ObjectNode body = objectMapper.createObjectNode();
-      body.put("model", model);
-      ArrayNode msgs = objectMapper.createArrayNode();
-      for (ChatMsg m : messages) {
-        msgs.add(toWireMessage(m));
-      }
-      body.set("messages", msgs);
-      if (tools != null && !tools.isEmpty()) {
-        ArrayNode toolArray = objectMapper.createArrayNode();
-        for (LlmToolSpec spec : tools) {
-          ObjectNode tool = objectMapper.createObjectNode();
-          tool.put("type", "function");
-          ObjectNode fn = objectMapper.createObjectNode();
-          fn.put("name", spec.name());
-          fn.put("description", spec.description());
-          fn.set("parameters", objectMapper.valueToTree(spec.parameters()));
-          tool.set("function", fn);
-          toolArray.add(tool);
-        }
-        body.set("tools", toolArray);
-        body.put("tool_choice", "auto");
-      }
-      if (reasoningEffort != null && !reasoningEffort.isBlank()) {
-        ObjectNode extra = objectMapper.createObjectNode();
-        extra.put("reasoning_effort", reasoningEffort);
-        extra.put("enable_thinking", true);
-        body.set("extra_body", extra);
-        body.put("reasoning_effort", reasoningEffort);
-      }
-      String resp = postWithRetry(baseUrl + "/chat/completions", apiKey, body, 2);
+      String resp = postWithRetry(baseUrl + "/chat/completions", apiKey,
+          toolBody(messages, tools, false), 2);
       return parseToolResponse(resp);
     } catch (Exception ex) {
       log.warn("工具对话调用失败已降级 err={}", ex.getMessage());
       return LlmToolResponse.degraded("");
     }
+  }
+
+  /**
+   * 带工具的流式补全：正文与推理逐增量回调，工具调用分片累积后整体返回。
+   *
+   * <p>tool_calls 分片规则：首片含 index/id/function.name，后续片只含 function.arguments 增量，
+   * 需按 index 归并拼接。正文与推理可直接推送，实现"边生成边显示"。
+   */
+  @Override
+  public LlmToolResponse streamWithTools(
+      List<ChatMsg> messages, List<LlmToolSpec> tools,
+      Consumer<String> onContent, Consumer<String> onReasoning) {
+    try {
+      ObjectNode body = toolBody(messages, tools, true);
+      ObjectNode streamOptions = objectMapper.createObjectNode();
+      streamOptions.put("include_usage", true);
+      body.set("stream_options", streamOptions);
+
+      HttpRequest request =
+          HttpRequest.newBuilder(URI.create(baseUrl + "/chat/completions"))
+              .timeout(Duration.ofSeconds(300))
+              .header("Authorization", "Bearer " + apiKey)
+              .header("Content-Type", "application/json")
+              .POST(HttpRequest.BodyPublishers.ofString(body.toString(), StandardCharsets.UTF_8))
+              .build();
+      HttpResponse<java.io.InputStream> response =
+          httpClient.send(request, HttpResponse.BodyHandlers.ofInputStream());
+
+      StringBuilder content = new StringBuilder();
+      StringBuilder reasoning = new StringBuilder();
+      // 工具调用分片：index → 累积器
+      Map<Integer, ToolCallAccumulator> callAcc = new LinkedHashMap<>();
+      LlmUsage usage = LlmUsage.empty();
+      try (var reader = new java.io.BufferedReader(
+          new java.io.InputStreamReader(response.body(), StandardCharsets.UTF_8))) {
+        String line;
+        while ((line = reader.readLine()) != null) {
+          line = line.trim();
+          if (line.isEmpty() || !line.startsWith("data:")) {
+            continue;
+          }
+          String payload = line.substring(5).trim();
+          if ("[DONE]".equals(payload)) {
+            break;
+          }
+          try {
+            JsonNode node = objectMapper.readTree(payload);
+            JsonNode usageNode = node.path("usage");
+            if (!usageNode.isMissingNode() && !usageNode.isNull()) {
+              usage = toUsage(usageNode);
+            }
+            JsonNode choices = node.path("choices");
+            if (!choices.isArray() || choices.isEmpty()) {
+              continue;
+            }
+            JsonNode delta = choices.get(0).path("delta");
+            String reasoningDelta = textOf(delta, "reasoning_content");
+            if (reasoningDelta == null) {
+              reasoningDelta = textOf(delta, "reasoning");
+            }
+            if (reasoningDelta != null && !reasoningDelta.isEmpty()) {
+              reasoning.append(reasoningDelta);
+              if (onReasoning != null) {
+                onReasoning.accept(reasoningDelta);
+              }
+            }
+            String contentDelta = textOf(delta, "content");
+            if (contentDelta != null && !contentDelta.isEmpty()) {
+              content.append(contentDelta);
+              if (onContent != null) {
+                onContent.accept(contentDelta);
+              }
+            }
+            JsonNode toolCalls = delta.path("tool_calls");
+            if (toolCalls.isArray()) {
+              for (JsonNode tc : toolCalls) {
+                int index = tc.path("index").asInt(0);
+                ToolCallAccumulator acc = callAcc.computeIfAbsent(index, k -> new ToolCallAccumulator());
+                String id = textOf(tc, "id");
+                if (id != null) {
+                  acc.id = id;
+                }
+                JsonNode fn = tc.path("function");
+                String name = textOf(fn, "name");
+                if (name != null) {
+                  acc.name = name;
+                }
+                String args = textOf(fn, "arguments");
+                if (args != null) {
+                  acc.arguments.append(args);
+                }
+              }
+            }
+          } catch (Exception parseEx) {
+            log.debug("流式工具分片解析跳过 err={}", parseEx.getMessage());
+          }
+        }
+      }
+      List<LlmToolCall> calls = new ArrayList<>();
+      for (ToolCallAccumulator acc : callAcc.values()) {
+        if (acc.name != null && !acc.name.isBlank()) {
+          calls.add(new LlmToolCall(
+              acc.id == null ? "" : acc.id, acc.name,
+              acc.arguments.length() == 0 ? "{}" : acc.arguments.toString()));
+        }
+      }
+      return new LlmToolResponse(content.toString(), reasoning.toString(), calls, usage, false);
+    } catch (Exception ex) {
+      log.warn("流式工具调用失败 err={}", ex.getMessage());
+      return LlmToolResponse.degraded("");
+    }
+  }
+
+  /** 工具调用分片累积器：arguments 跨片拼接。 */
+  private static final class ToolCallAccumulator {
+    private String id;
+    private String name;
+    private final StringBuilder arguments = new StringBuilder();
+  }
+
+  /** 构造带工具声明的请求体（流式与非流式共用）。 */
+  private ObjectNode toolBody(List<ChatMsg> messages, List<LlmToolSpec> tools, boolean stream) {
+    ObjectNode body = objectMapper.createObjectNode();
+    body.put("model", model);
+    if (stream) {
+      body.put("stream", true);
+    }
+    ArrayNode msgs = objectMapper.createArrayNode();
+    for (ChatMsg m : messages) {
+      msgs.add(toWireMessage(m));
+    }
+    body.set("messages", msgs);
+    if (tools != null && !tools.isEmpty()) {
+      ArrayNode toolArray = objectMapper.createArrayNode();
+      for (LlmToolSpec spec : tools) {
+        ObjectNode tool = objectMapper.createObjectNode();
+        tool.put("type", "function");
+        ObjectNode fn = objectMapper.createObjectNode();
+        fn.put("name", spec.name());
+        fn.put("description", spec.description());
+        fn.set("parameters", objectMapper.valueToTree(spec.parameters()));
+        tool.set("function", fn);
+        toolArray.add(tool);
+      }
+      body.set("tools", toolArray);
+      body.put("tool_choice", "auto");
+    }
+    if (reasoningEffort != null && !reasoningEffort.isBlank()) {
+      ObjectNode extra = objectMapper.createObjectNode();
+      extra.put("reasoning_effort", reasoningEffort);
+      extra.put("enable_thinking", true);
+      body.set("extra_body", extra);
+      body.put("reasoning_effort", reasoningEffort);
+    }
+    return body;
   }
 
   @Override
