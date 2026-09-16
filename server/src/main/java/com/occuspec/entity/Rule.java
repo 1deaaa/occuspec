@@ -1,6 +1,7 @@
 package com.occuspec.entity;
 
 import com.baomidou.mybatisplus.annotation.IdType;
+import com.baomidou.mybatisplus.annotation.TableField;
 import com.baomidou.mybatisplus.annotation.TableId;
 import com.baomidou.mybatisplus.annotation.TableName;
 import java.time.LocalDateTime;
@@ -16,6 +17,7 @@ public class Rule {
   private String expression;
   private String conclusion;
   private Integer weight;
+  @TableField("is_enabled")
   private Boolean enabled;
   private String version;
   private LocalDateTime createdAt;

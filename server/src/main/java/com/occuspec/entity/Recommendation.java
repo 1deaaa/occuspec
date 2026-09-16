@@ -1,6 +1,7 @@
 package com.occuspec.entity;
 
 import com.baomidou.mybatisplus.annotation.IdType;
+import com.baomidou.mybatisplus.annotation.TableField;
 import com.baomidou.mybatisplus.annotation.TableId;
 import com.baomidou.mybatisplus.annotation.TableName;
 
@@ -13,6 +14,7 @@ public class Recommendation {
   private String itemCode;
   private String itemName;
   private String reason;
+  @TableField("is_extended")
   private Boolean extended;
   private String sourceClauseNo;
 

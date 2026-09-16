@@ -95,11 +95,8 @@
       <artifactId>sa-token-spring-boot3-starter</artifactId>
       <version>${sa-token.version}</version>
     </dependency>
-    <dependency>
-      <groupId>cn.dev33</groupId>
-      <artifactId>sa-token-redis-jackson</artifactId>
-      <version>${sa-token.version}</version>
-    </dependency>
+    <!-- Sa-Token 会话：本地 Redis 3.x 不支持 1.46 的 SET KEEPTTL，先用内存会话保证可用 -->
+    <!-- 如需 Redis 持久化会话，请升级 Redis 至 6.0+ 后换回 sa-token-redis-jackson -->
     <dependency>
       <groupId>org.apache.commons</groupId>
       <artifactId>commons-pool2</artifactId>

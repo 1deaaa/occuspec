@@ -37,7 +37,7 @@ public class PersonService {
     person.setBirthDate(request.birthDate());
     person.setCompany(request.company() == null ? "" : request.company());
     person.setJobType(request.jobType() == null ? "" : request.jobType());
-    person.setExposureHistory(request.exposureHistory() == null ? "" : request.exposureHistory());
+    person.setExposureHistory(toJsonArray(request.exposureHistory()));
     personMapper.insert(person);
     auditService.record("PERSON", String.valueOf(person.getId()), operatorId, "创建体检对象", person.getName(), 0);
     Map<String, Object> result = new HashMap<>();
@@ -62,5 +62,17 @@ public class PersonService {
     } catch (Exception e) {
       throw new BusinessException(ErrorCode.INTERNAL_ERROR, "哈希失败");
     }
+  }
+
+  /** 接害史统一存 JSON 数组：纯文本转单元素数组，已是 JSON 则原样保留。 */
+  private String toJsonArray(String raw) {
+    if (raw == null || raw.isBlank()) {
+      return "[]";
+    }
+    String text = raw.trim();
+    if (text.startsWith("[") || text.startsWith("{")) {
+      return text;
+    }
+    return "[\"" + text.replace("\\", "\\\\").replace("\"", "\\\"") + "\"]";
   }
 }
