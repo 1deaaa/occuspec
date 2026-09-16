@@ -17,11 +17,11 @@ Thumbs.db
 server/src/main/resources/application-local.yml
 server/src/main/resources/application-dev.yml
 
-# 数据与模型缓存
-data-markdown/_cache/
-*.pdf
-*.bin
-*.onnx
+# 数据源（本地标准文档，不进入开源仓库；_cache 为转换缓存）
+data-markdown/
+# 内部工作文档（不得进入开源仓库）
+原始开工总纲.md
+tmp_*.py
 
 # IDE 与编辑器
 .idea/
