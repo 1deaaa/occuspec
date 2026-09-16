@@ -12,6 +12,7 @@ import java.util.ArrayList;
 import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
+import org.junit.jupiter.api.Tag;
 import org.junit.jupiter.api.Test;
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.boot.test.context.SpringBootTest;
@@ -26,9 +27,9 @@ import org.springframework.test.context.ActiveProfiles;
  *   <li>本测试用真实模型，验证"模型是否真的会自主选择检索工具与过滤维度"，
  *       这是 Agentic 特性的关键证据，无法用替身证明。</li>
  * </ul>
- * 因此本测试需要外网与密钥，失败时不代表代码回归（上游抖动、额度、模型行为漂移均可能），
- * 仅在开发阶段人工运行观察，不纳入常规回归门槛。
+ * 属于功能级探索测试，按项目约定允许打上游；批量回归默认排除，测试策略见 {@code docs/test-strategy.md}。
  */
+@Tag("live")
 @SpringBootTest
 @ActiveProfiles("local")
 class AgentLiveProbeTest {

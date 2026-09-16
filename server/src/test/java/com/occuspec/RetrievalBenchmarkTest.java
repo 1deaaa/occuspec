@@ -5,6 +5,7 @@ import com.occuspec.rag.ClauseVectorStore;
 import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
+import org.junit.jupiter.api.Tag;
 import org.junit.jupiter.api.Test;
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.test.context.ActiveProfiles;
@@ -16,7 +17,10 @@ import org.springframework.boot.test.context.SpringBootTest;
  * <p>相关性标注采用条款自身的 hazard_code（由 GBZ 188 章节结构生成，非人工临时判断）：
  * 查询某危害因素时，命中条款的 hazard_code 与查询危害一致即视为相关。
  * 输出 P@K 与相关条款占比，供工程基准文档引用。
+ *
+ * <p>检索需调用嵌入服务，标记 live。
  */
+@Tag("live")
 @SpringBootTest
 @ActiveProfiles("local")
 class RetrievalBenchmarkTest {

@@ -177,8 +177,27 @@
         <artifactId>maven-surefire-plugin</artifactId>
         <configuration>
           <useSystemClassLoader>false</useSystemClassLoader>
+          <!-- 默认回归不联网：排除标记为 live 的测试（真实模型/嵌入服务） -->
+          <excludedGroups>live</excludedGroups>
         </configuration>
       </plugin>
     </plugins>
   </build>
+
+  <profiles>
+    <!-- 联网回归：mvn test -Plive。需要外网与模型密钥，用于人工验证真实链路 -->
+    <profile>
+      <id>live</id>
+      <build>
+        <plugins>
+          <plugin>
+            <artifactId>maven-surefire-plugin</artifactId>
+            <configuration>
+              <excludedGroups combine.self="override"></excludedGroups>
+            </configuration>
+          </plugin>
+        </plugins>
+      </build>
+    </profile>
+  </profiles>
 </project>
