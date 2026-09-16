@@ -26,4 +26,14 @@ class EmbedSmokeTest {
     long after = vectorStore.count();
     System.out.println("VECTORS_AFTER=" + after);
   }
+
+  @Test
+  void 全量入库() {
+    long before = vectorStore.count();
+    System.out.println("FULL_BEFORE=" + before);
+    var result = tools.embedClauses(16, 6000);
+    System.out.println("FULL done=" + result.done() + " failed=" + result.failed());
+    long after = vectorStore.count();
+    System.out.println("FULL_AFTER=" + after);
+  }
 }

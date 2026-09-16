@@ -26,6 +26,7 @@ tmp_*.py
 # IDE 与编辑器
 .idea/
 .vscode/
+.kilo/
 *.iml
 *.swp
 *.swo
