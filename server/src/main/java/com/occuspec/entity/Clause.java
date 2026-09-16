@@ -16,6 +16,8 @@ public class Clause {
   private String content;
   private Integer pageNo;
   private String appendixType;
+  /** 检查阶段：上岗前/在岗期间/离岗时/应急。 */
+  private String phase;
   private String hazardCode;
   private String checkClass;
   private String targetText;
@@ -39,6 +41,8 @@ public class Clause {
   public void setPageNo(Integer pageNo) { this.pageNo = pageNo; }
   public String getAppendixType() { return appendixType; }
   public void setAppendixType(String appendixType) { this.appendixType = appendixType; }
+  public String getPhase() { return phase; }
+  public void setPhase(String phase) { this.phase = phase; }
   public String getHazardCode() { return hazardCode; }
   public void setHazardCode(String hazardCode) { this.hazardCode = hazardCode; }
   public String getCheckClass() { return checkClass; }

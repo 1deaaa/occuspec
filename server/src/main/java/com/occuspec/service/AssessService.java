@@ -44,6 +44,7 @@ public class AssessService {
   private final ExamItemMapper examItemMapper;
   private final RecommendationMapper recommendationMapper;
   private final AuditService auditService;
+  private final HazardService hazardService;
   private final ObjectMapper objectMapper;
 
   public AssessService(
@@ -56,6 +57,7 @@ public class AssessService {
       ExamItemMapper examItemMapper,
       RecommendationMapper recommendationMapper,
       AuditService auditService,
+      HazardService hazardService,
       ObjectMapper objectMapper) {
     this.examService = examService;
     this.retrievalTools = retrievalTools;
@@ -67,6 +69,7 @@ public class AssessService {
     this.examItemMapper = examItemMapper;
     this.recommendationMapper = recommendationMapper;
     this.auditService = auditService;
+    this.hazardService = hazardService;
     this.objectMapper = objectMapper;
   }
 
@@ -136,19 +139,9 @@ public class AssessService {
     return facts;
   }
 
-  /** 危害中文名：向量查询用中文，避免英文编码在中文向量空间失配。 */
+  /** 危害中文名：查库获取，新增危害因素无需改代码。 */
   private String hazardName(String hazardCode) {
-    if (hazardCode == null) {
-      return "";
-    }
-    return switch (hazardCode) {
-      case "noise" -> "噪声";
-      case "lead" -> "铅及其无机化合物";
-      case "benzene" -> "苯";
-      case "dust_silica" -> "游离二氧化硅粉尘";
-      case "toluene" -> "甲苯";
-      default -> hazardCode;
-    };
+    return hazardService.nameOf(hazardCode);
   }
 
   /** 检查项中文名列表：拼入向量查询文本。 */

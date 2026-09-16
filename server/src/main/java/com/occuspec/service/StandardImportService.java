@@ -2,11 +2,16 @@ package com.occuspec.service;
 
 import com.baomidou.mybatisplus.core.conditions.query.LambdaQueryWrapper;
 import com.occuspec.entity.Clause;
+import com.occuspec.entity.Hazard;
 import com.occuspec.entity.Standard;
 import com.occuspec.mapper.ClauseMapper;
+import com.occuspec.mapper.HazardMapper;
 import com.occuspec.mapper.StandardMapper;
 import com.occuspec.parser.ClauseSplitter;
+import com.occuspec.parser.HazardCatalogParser;
+import com.occuspec.parser.HazardResolver;
 import com.occuspec.parser.MetadataExtractor;
+import com.occuspec.parser.PhaseExtractor;
 import com.occuspec.parser.StandardMeta;
 import java.nio.charset.StandardCharsets;
 import java.nio.file.Files;
@@ -29,40 +34,67 @@ public class StandardImportService {
   private static final Logger log = LoggerFactory.getLogger(StandardImportService.class);
   private final StandardMapper standardMapper;
   private final ClauseMapper clauseMapper;
+  private final HazardMapper hazardMapper;
   private final ClauseSplitter splitter;
+  private final PhaseExtractor phaseExtractor;
+  private final HazardCatalogParser hazardCatalogParser;
   private final Path dataDir;
+  /** 危害因素解析器：首次导入 GBZ 188 后按目录构建，供后续标准按名称匹配。 */
+  private volatile HazardResolver hazardResolver;
 
   public StandardImportService(
       StandardMapper standardMapper,
       ClauseMapper clauseMapper,
+      HazardMapper hazardMapper,
       @Value("${occuspec.data-dir:../data-markdown}") String dataDir) {
     this.standardMapper = standardMapper;
     this.clauseMapper = clauseMapper;
+    this.hazardMapper = hazardMapper;
     this.splitter = new ClauseSplitter();
+    this.phaseExtractor = new PhaseExtractor();
+    this.hazardCatalogParser = new HazardCatalogParser();
     this.dataDir = Path.of(dataDir);
   }
 
   /** 全量导入：遍历数据目录顶层 Markdown。 */
   public ImportResult importAll() throws Exception {
+    // 先导入 GBZ 188，用其目录初始化危害因素表与解析器，其余标准按名称匹配
+    List<Path> mdFiles = listMarkdown();
+    Path gbz188 = mdFiles.stream()
+        .filter(p -> p.getFileName().toString().startsWith("GBZ188"))
+        .findFirst()
+        .orElse(null);
     int files = 0;
     int clauses = 0;
     int skipped = 0;
-    try (var stream = Files.list(dataDir)) {
-      List<Path> mdFiles =
-          stream.filter(p -> p.toString().endsWith(".md")).sorted().toList();
-      for (Path file : mdFiles) {
-        String name = file.getFileName().toString();
-        if (name.startsWith("_")) {
-          continue;
-        }
-        FileResult r = importFile(file);
-        files++;
-        clauses += r.imported();
-        skipped += r.skipped();
+    if (gbz188 != null) {
+      FileResult r = importFile(gbz188);
+      files++;
+      clauses += r.imported();
+      skipped += r.skipped();
+    }
+    for (Path file : mdFiles) {
+      if (file.equals(gbz188)) {
+        continue;
       }
+      FileResult r = importFile(file);
+      files++;
+      clauses += r.imported();
+      skipped += r.skipped();
     }
     log.info("标准导入完成 files={} clauses={} skipped={}", files, clauses, skipped);
     return new ImportResult(files, clauses, skipped);
+  }
+
+  /** 列出待导入的 Markdown 文件（跳过下划线前缀）。 */
+  private List<Path> listMarkdown() throws Exception {
+    try (var stream = Files.list(dataDir)) {
+      return stream
+          .filter(p -> p.toString().endsWith(".md"))
+          .filter(p -> !p.getFileName().toString().startsWith("_"))
+          .sorted()
+          .toList();
+    }
   }
 
   /** 导入单个文件，返回新增与跳过数。 */
@@ -71,7 +103,12 @@ public class StandardImportService {
     String markdown = Files.readString(file, StandardCharsets.UTF_8);
     String head = markdown.length() > 4000 ? markdown.substring(0, 4000) : markdown;
     String standardCode = StandardMeta.extractStandardCode(head, file.getFileName().toString());
-    // 整卷哈希去重：重复文件直接跳过（指纹存 standards 表备注字段外，此处查条款的 DOC 标记需截断适配列宽）
+    String fileName = file.getFileName().toString();
+    // GBZ 188：初始化危害因素目录（97 项）与解析器
+    if (HazardResolver.isGbz188(standardCode)) {
+      initializeHazards(markdown, standardCode);
+    }
+    // 整卷哈希去重：重复文件直接跳过
     String docHash = sha256(markdown);
     String docMark = "DOC:" + docHash.substring(0, 32);
     Long dupDoc = clauseMapper.selectCount(
@@ -81,7 +118,8 @@ public class StandardImportService {
     if (dupDoc != null && dupDoc > 0) {
       return new FileResult(0, 1);
     }
-    upsertStandard(standardCode, file.getFileName().toString());
+    upsertStandard(standardCode, fileName);
+    String standardName = fileName.replaceAll("\\.md$", "");
     List<ClauseSplitter.Chunk> chunks = splitter.split(standardCode, markdown);
     int imported = 0;
     int skipped = 0;
@@ -104,7 +142,9 @@ public class StandardImportService {
       clause.setContent(chunk.content());
       clause.setPageNo(chunk.pageNo() == 0 ? null : chunk.pageNo());
       clause.setAppendixType(truncate(chunk.appendixType(), 12));
-      clause.setHazardCode(truncate(StandardMeta.mapHazard(chunk.clauseNo(), chunk.title()), 60));
+      clause.setHazardCode(truncate(resolveHazard(standardCode, standardName, chunk), 60));
+      clause.setPhase(truncate(
+          phaseExtractor.extract(chunk.clauseNo(), chunk.title(), chunk.content()), 12));
       clause.setCheckClass(truncate(MetadataExtractor.extractCheckClass(chunk.content()), 12));
       clause.setTargetText(truncate(MetadataExtractor.extractTarget(chunk.content()), 1000));
       clause.setPeriodText(truncate(MetadataExtractor.extractPeriod(chunk.content()), 250));
@@ -124,11 +164,51 @@ public class StandardImportService {
     Clause mark = new Clause();
     mark.setStandardCode(truncate(standardCode, 56));
     mark.setClauseNo(docMark);
-    mark.setTitle(truncate(file.getFileName().toString(), 500));
+    mark.setTitle(truncate(fileName, 500));
     mark.setContent("__DOC_HASH__");
     mark.setContentHash(sha256(standardCode + docHash));
     clauseMapper.insert(mark);
     return new FileResult(imported, skipped);
+  }
+
+  /** 初始化危害因素表（97 项）与解析器；已存在则确保解析器可用。 */
+  private void initializeHazards(String markdown, String standardCode) {
+    if (hazardResolver != null) {
+      return;
+    }
+    List<HazardCatalogParser.HazardItem> items = hazardCatalogParser.parse(markdown);
+    for (HazardCatalogParser.HazardItem item : items) {
+      String code = HazardCatalogParser.toCode(item.sectionNo());
+      Hazard existing = hazardMapper.selectById(code);
+      if (existing != null) {
+        continue;
+      }
+      Hazard hazard = new Hazard();
+      hazard.setCode(code);
+      hazard.setName(truncate(item.name(), 120));
+      hazard.setCategory(truncate(item.category(), 16));
+      hazard.setExposureLimit("");
+      hazard.setSectionNo(item.sectionNo());
+      hazard.setSourceStandard(truncate(standardCode, 60));
+      hazard.setAliases(toJson(item.aliases()));
+      try {
+        hazardMapper.insert(hazard);
+      } catch (Exception ex) {
+        log.debug("危害因素已存在 code={}", code);
+      }
+    }
+    hazardResolver = new HazardResolver(items);
+    log.info("危害因素目录初始化完成 count={}", items.size());
+  }
+
+  /** 解析危害因素：优先用已构建的解析器，未初始化时按标准号回退。 */
+  private String resolveHazard(String standardCode, String standardName, ClauseSplitter.Chunk chunk) {
+    HazardResolver resolver = hazardResolver;
+    if (resolver != null) {
+      return resolver.resolve(standardCode, standardName, chunk.clauseNo());
+    }
+    // 非 GBZ 188 标准先于 188 导入时的兜底：仅按名称匹配
+    return new HazardResolver(List.of()).resolve(standardCode, standardName, chunk.clauseNo());
   }
 
   private void upsertStandard(String code, String fileName) {
