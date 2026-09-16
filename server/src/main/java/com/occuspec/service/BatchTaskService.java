@@ -26,14 +26,18 @@ public class BatchTaskService {
   private final DistributedLock distributedLock;
   private final AssessService assessService;
   private final java.util.concurrent.Executor batchExecutor;
+  /** 判定专用线程池：与批量任务调度隔离，避免相互挤占（见 ThreadPoolConfig）。 */
+  private final java.util.concurrent.Executor assessExecutor;
 
   public BatchTaskService(
       BatchTaskMapper batchTaskMapper, DistributedLock distributedLock,
-      AssessService assessService, @Qualifier("batchExecutor") java.util.concurrent.Executor batchExecutor) {
+      AssessService assessService, @Qualifier("batchExecutor") java.util.concurrent.Executor batchExecutor,
+      @Qualifier("assessExecutor") java.util.concurrent.Executor assessExecutor) {
     this.batchTaskMapper = batchTaskMapper;
     this.distributedLock = distributedLock;
     this.assessService = assessService;
     this.batchExecutor = batchExecutor;
+    this.assessExecutor = assessExecutor;
   }
 
   /** 创建批量任务（CSV 内容已解析为 examId 列表，此处简化存文件路径）。 */
@@ -85,7 +89,8 @@ public class BatchTaskService {
     List<Long> examIds = parseExamIds(task.getErrorUrl());
     java.util.concurrent.atomic.AtomicInteger success = new java.util.concurrent.atomic.AtomicInteger();
     java.util.concurrent.atomic.AtomicInteger fail = new java.util.concurrent.atomic.AtomicInteger();
-    // 并发判定：每条含模型调用（数十秒），串行会线性累加；用有界线程池并发推进
+    // 并发判定：每条含模型调用（数十秒），串行会线性累加；
+    // 用判定专用线程池推进，与批量调度线程隔离，避免调度被判定任务占满
     List<java.util.concurrent.CompletableFuture<Void>> futures = new java.util.ArrayList<>();
     for (Long examId : examIds) {
       futures.add(java.util.concurrent.CompletableFuture.runAsync(() -> {
@@ -96,7 +101,7 @@ public class BatchTaskService {
           fail.incrementAndGet();
           log.warn("批量判定失败 task={} exam={} err={}", taskId, examId, ex.getMessage());
         }
-      }, batchExecutor));
+      }, assessExecutor));
     }
     String finalStatus;
     try {
