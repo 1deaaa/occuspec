@@ -3,12 +3,117 @@
 @tailwind utilities;
 
 :root {
-  --background: #ffffff;
-  --foreground: #171717;
+  --ink: #0a1628;
+  --blue: #0b5fff;
+  --blue-dark: #0849c4;
+  --line: #dbe4f0;
+  --bg: #f4f7fc;
+  --card: #ffffff;
+  --muted: #5b6b82;
 }
 
+/* 蓝白黑锐利风：全部直角、无圆角 */
+* {
+  border-radius: 0 !important;
+}
+
+html,
 body {
-  background: var(--background);
-  color: var(--foreground);
-  font-family: Arial, Helvetica, sans-serif;
+  background: var(--bg);
+  color: var(--ink);
+  font-family: "Segoe UI", "Microsoft YaHei", system-ui, sans-serif;
+}
+
+/* 细节过渡动画：非线性缓动 */
+.transition-sharp {
+  transition: all 0.22s cubic-bezier(0.22, 0.9, 0.24, 1);
+}
+
+.card {
+  background: var(--card);
+  border: 1px solid var(--line);
+}
+
+.btn-primary {
+  background: var(--blue);
+  color: #fff;
+  transition: background 0.22s cubic-bezier(0.22, 0.9, 0.24, 1), transform 0.18s ease;
+}
+
+.btn-primary:hover {
+  background: var(--blue-dark);
+}
+
+.btn-primary:active {
+  transform: translateY(1px);
+}
+
+.nav-item {
+  border-left: 3px solid transparent;
+  transition: border-color 0.2s ease, background 0.22s cubic-bezier(0.22, 0.9, 0.24, 1);
+}
+
+.nav-item:hover {
+  background: #e8eefb;
+}
+
+.nav-item.active {
+  border-left-color: var(--blue);
+  background: #e2ebfd;
+  color: var(--ink);
+}
+
+/* 流式文本光标 */
+.stream-caret::after {
+  content: "▍";
+  color: var(--blue);
+  animation: caret-blink 0.9s steps(1) infinite;
+}
+
+@keyframes caret-blink {
+  50% {
+    opacity: 0;
+  }
+}
+
+/* 可折叠推理块展开动画 */
+.fold-body {
+  display: grid;
+  grid-template-rows: 1fr;
+  transition: grid-template-rows 0.28s cubic-bezier(0.22, 0.9, 0.24, 1), opacity 0.25s ease;
+  opacity: 1;
+}
+
+.fold-body.collapsed {
+  grid-template-rows: 0fr;
+  opacity: 0;
+}
+
+.fold-inner {
+  overflow: hidden;
+}
+
+/* 工具调用条目滑入 */
+@keyframes slide-in {
+  from {
+    opacity: 0;
+    transform: translateY(6px);
+  }
+  to {
+    opacity: 1;
+    transform: translateY(0);
+  }
+}
+
+.tool-entry {
+  animation: slide-in 0.25s cubic-bezier(0.22, 0.9, 0.24, 1);
+}
+
+/* 表格行悬停 */
+.row-hover {
+  transition: background 0.18s ease;
+}
+
+.row-hover:hover {
+  background: #eef3fd;
 }
