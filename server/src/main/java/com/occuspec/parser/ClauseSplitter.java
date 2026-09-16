@@ -23,6 +23,9 @@ public class ClauseSplitter {
   // 附录条款：A.1 / B.2.3 类（# 或 - 前缀），编号后需跟标题文字
   private static final Pattern APPENDIX_CLAUSE =
       Pattern.compile("^((?:#{1,4}|-)\\s+)([A-G]\\.\\d+(?:\\.\\d+)*)\\b(.*\\S.*)$");
+  // 老版标准纯文本章号：无 # 与 - 前缀，如 "1 范围""5.1 噪声聋患者均应调离"
+  private static final Pattern PLAIN_CLAUSE =
+      Pattern.compile("^(\\d+(?:\\.\\d+){0,2})\\s+(\\S.*)$");
   // 表格/图标题独立成块
   private static final Pattern TABLE_TITLE = Pattern.compile("^\\s*#{0,2}\\s*(表[A-Z]?\\.?\\d*|图[A-Z]?\\.?\\d*)\\b(.*)$");
   // 页码标记只做属性
@@ -107,6 +110,7 @@ public class ClauseSplitter {
       Matcher numeric = NUMERIC_CLAUSE.matcher(line);
       Matcher appendix = APPENDIX_CLAUSE.matcher(line);
       Matcher table = TABLE_TITLE.matcher(line);
+      Matcher plain = PLAIN_CLAUSE.matcher(line);
       Matcher matched = null;
       String clauseNo = null;
       String title = "";
@@ -120,6 +124,11 @@ public class ClauseSplitter {
         matched = appendix;
         clauseNo = appendix.group(2);
         title = appendix.group(3).trim();
+      } else if (plain.matches() && isPlainClause(plain.group(1), plain.group(2))) {
+        // 老版标准用纯文本章号（"1 范围"），无 # 与 - 前缀
+        matched = plain;
+        clauseNo = plain.group(1);
+        title = plain.group(2).trim();
       } else if (table.matches()) {
         // 表格标题独立成块，编号用表号
         if (current != null) {
@@ -169,6 +178,26 @@ public class ClauseSplitter {
       blocks.add(current);
     }
     return blocks;
+  }
+
+  /**
+   * 纯文本章号有效性：排除正文列表项与测量数值行。
+   * 章号后的标题需短于 60 字且不以句号结尾（正文句通常较长且以标点收尾）。
+   */
+  private boolean isPlainClause(String no, String title) {
+    if (no == null || title == null || title.isBlank()) {
+      return false;
+    }
+    // 纯年份/纯大数值不是章号
+    if (no.matches("\\d{4,}")) {
+      return false;
+    }
+    // 标题过长说明是正文段落而非章标题
+    if (title.length() > 60) {
+      return false;
+    }
+    // 以句末标点收尾多为正文句子
+    return !title.endsWith("。") && !title.endsWith("；");
   }
 
   /**
