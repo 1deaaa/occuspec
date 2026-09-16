@@ -3,9 +3,11 @@ package com.occuspec.rag;
 import com.baomidou.mybatisplus.core.conditions.query.LambdaQueryWrapper;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import com.fasterxml.jackson.databind.node.ObjectNode;
+import com.occuspec.common.HotCache;
 import com.occuspec.entity.Clause;
 import com.occuspec.llm.LlmGateway;
 import com.occuspec.mapper.ClauseMapper;
+import java.time.Duration;
 import java.util.ArrayList;
 import java.util.Collections;
 import java.util.HashMap;
@@ -28,20 +30,25 @@ import org.springframework.stereotype.Component;
 @Component
 public class ClauseRetrievalTools {
   private static final Logger log = LoggerFactory.getLogger(ClauseRetrievalTools.class);
+  /** 条款全文的热点缓存 TTL：条款内容近乎静态，可较长。 */
+  private static final Duration CLAUSE_TTL = Duration.ofHours(6);
   private final ClauseMapper clauseMapper;
   private final ClauseVectorStore vectorStore;
   private final LlmGateway llmGateway;
   private final ObjectMapper objectMapper;
   private final Executor batchExecutor;
+  private final HotCache hotCache;
 
   public ClauseRetrievalTools(
       ClauseMapper clauseMapper, ClauseVectorStore vectorStore, LlmGateway llmGateway,
-      ObjectMapper objectMapper, @Qualifier("batchExecutor") Executor batchExecutor) {
+      ObjectMapper objectMapper, @Qualifier("batchExecutor") Executor batchExecutor,
+      HotCache hotCache) {
     this.clauseMapper = clauseMapper;
     this.vectorStore = vectorStore;
     this.llmGateway = llmGateway;
     this.objectMapper = objectMapper;
     this.batchExecutor = batchExecutor;
+    this.hotCache = hotCache;
   }
 
   /** 工具调用记录。 */
@@ -99,8 +106,29 @@ public class ClauseRetrievalTools {
   /**
    * 元数据发现工具：返回各维度的可用取值与数量，供 Agent 决定如何过滤。
    * 值域动态来自向量库与数据库，新增危害因素无需改代码。
+   * 维度分布是全表聚合，代价高且变化慢，走热点缓存。
    */
   public MetadataDiscovery describeMetadata() {
+    String cached = hotCache.get("occuspec:metadata:discovery", Duration.ofMinutes(30),
+        () -> {
+          try {
+            return objectMapper.writeValueAsString(buildMetadataDiscovery());
+          } catch (Exception ex) {
+            log.debug("元数据发现序列化失败 err={}", ex.getMessage());
+            return null;
+          }
+        });
+    if (cached == null) {
+      return buildMetadataDiscovery();
+    }
+    try {
+      return objectMapper.readValue(cached, MetadataDiscovery.class);
+    } catch (Exception ex) {
+      return buildMetadataDiscovery();
+    }
+  }
+
+  private MetadataDiscovery buildMetadataDiscovery() {
     Map<String, Map<String, Integer>> dimensions = new HashMap<>();
     for (String dim : List.of("hazard_code", "phase", "check_class", "appendix_type", "standard_code")) {
       Map<String, Integer> dist = vectorStore.distribution(dim);
@@ -135,10 +163,7 @@ public class ClauseRetrievalTools {
     args.put("standard", standardCode);
     args.put("clause", clauseNo);
     List<RetrievedClause> clauses = new ArrayList<>();
-    Clause clause = clauseMapper.selectOne(new LambdaQueryWrapper<Clause>()
-        .eq(Clause::getStandardCode, standardCode)
-        .eq(Clause::getClauseNo, clauseNo)
-        .last("LIMIT 1"));
+    Clause clause = loadClause(standardCode, clauseNo);
     String note;
     if (clause == null) {
       note = "未找到精确条款";
@@ -147,6 +172,41 @@ public class ClauseRetrievalTools {
       note = "精确命中 1 条";
     }
     return new RetrievalResult(clauses, new ToolCall("clause_fetch", args, clauses.size(), note));
+  }
+
+  /**
+   * 精确条款查询（带热点缓存）：Agent 常反复 fetch 同一条款，
+   * cache-aside 减少数据库读；空结果以短 TTL 占位防穿透。
+   */
+  private Clause loadClause(String standardCode, String clauseNo) {
+    if (standardCode == null || clauseNo == null) {
+      return null;
+    }
+    String key = "occuspec:clause:exact:" + standardCode + ":" + clauseNo;
+    String json = hotCache.get(key, CLAUSE_TTL, () -> {
+      Clause found = clauseMapper.selectOne(new LambdaQueryWrapper<Clause>()
+          .eq(Clause::getStandardCode, standardCode)
+          .eq(Clause::getClauseNo, clauseNo)
+          .last("LIMIT 1"));
+      if (found == null) {
+        return null;
+      }
+      try {
+        return objectMapper.writeValueAsString(found);
+      } catch (Exception ex) {
+        log.debug("条款序列化失败 std={} no={} err={}", standardCode, clauseNo, ex.getMessage());
+        return null;
+      }
+    });
+    if (json == null) {
+      return null;
+    }
+    try {
+      return objectMapper.readValue(json, Clause.class);
+    } catch (Exception ex) {
+      log.debug("条款反序列化失败 std={} no={} err={}", standardCode, clauseNo, ex.getMessage());
+      return null;
+    }
   }
 
   /** 沿引用回链展开：解析条款 relations 字段中的 SAME/REF/APPENDIX，取回引用条款。 */
