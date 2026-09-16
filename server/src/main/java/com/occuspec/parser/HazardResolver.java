@@ -35,7 +35,8 @@ public class HazardResolver {
     List<Map.Entry<String, HazardCatalogParser.HazardItem>> entries = new ArrayList<>();
     for (HazardCatalogParser.HazardItem item : catalog) {
       for (String alias : item.aliases()) {
-        if (alias != null && alias.length() >= 2) {
+        // 中文单字别名有效（如"苯""氨"），长度靠 stop words 与长名优先排序兜底
+        if (alias != null && !alias.isBlank()) {
           entries.add(Map.entry(alias, item));
         }
       }

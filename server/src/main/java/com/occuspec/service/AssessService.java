@@ -96,10 +96,11 @@ public class AssessService {
     toolCalls.add(toMap(route.call()));
     emitTool(listener, route.call());
 
-    // 2. 语义检索：优先危害因素过滤；向量库覆盖不足时自动回退关键词直查（工具内已实现二次放宽）。
+    // 2. 语义检索：按危害因素过滤；向量库覆盖不足时由工具层显式放宽并留痕。
     // 查询文本使用中文危害名+检查项中文名，避免英文编码在中文向量空间失配。
     String query = hazardName(hazard) + " 职业禁忌证 目标疾病 检查内容 " + String.join(" ", itemNames(snapshot));
-    var retrieval = retrievalTools.retrieve(query, 8, hazard, null);
+    var retrieval = retrievalTools.retrieve(query, 8,
+        new com.occuspec.rag.ClauseVectorStore.Filters(hazard, null, null, null, null));
     toolCalls.add(toMap(retrieval.call()));
     emitTool(listener, retrieval.call());
     emit(listener, "召回条款 " + retrieval.clauses().size() + " 条，开始规则匹配");

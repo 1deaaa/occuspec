@@ -30,11 +30,28 @@ class MetadataExtractorTest {
   }
 
   @Test
-  void 标准号提取与危害映射() {
+  void 标准号提取() {
     String code = StandardMeta.extractStandardCode("GBZ 188—2025 代替旧版", "未知.md");
     assertTrue(code.contains("188"));
-    assertEquals("noise", StandardMeta.mapHazard("7.1.2", ""));
-    assertEquals("lead", StandardMeta.mapHazard("5.1.1", ""));
-    assertEquals("", StandardMeta.mapHazard("3.1", "术语和定义"));
+  }
+
+  @Test
+  void 危害因素按章节解析() {
+    var catalog = new HazardCatalogParser().parse("# 7.1 噪声\n# 5.19 苯（CAS 号：71-43-2）\n");
+    var resolver = new HazardResolver(catalog);
+    assertEquals("gbz188-7-1", resolver.resolve("GBZ188-2025", "职业健康监护技术规范", "7.1.2"));
+    assertEquals("gbz188-5-19", resolver.resolve("GBZ188-2025", "职业健康监护技术规范", "5.19.1.1"));
+    // 章节外条款不误标
+    assertEquals("", resolver.resolve("GBZ188-2025", "职业健康监护技术规范", "4.8.2"));
+  }
+
+  @Test
+  void 非GBZ188按标准名解析且测量类不误标() {
+    var catalog = new HazardCatalogParser().parse("# 7.1 噪声\n# 5.19 苯（CAS 号：71-43-2）\n");
+    var resolver = new HazardResolver(catalog);
+    assertEquals("gbz188-5-19", resolver.resolve("GBZ68-2022", "GBZ68-2022-职业性苯中毒诊断标准", "4.1"));
+    // 测量/采样/分级类标准不锁定危害因素
+    assertEquals("", resolver.resolve("GBZT189.9-2025", "工作场所物理因素测量 第9部分：手传振动", "4.1"));
+    assertEquals("", resolver.resolve("GBZT192.1-2025", "工作场所空气中粉尘测定 第1部分：总粉尘浓度", "3.1"));
   }
 }

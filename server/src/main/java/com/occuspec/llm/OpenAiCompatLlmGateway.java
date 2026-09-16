@@ -188,6 +188,91 @@ public class OpenAiCompatLlmGateway implements LlmGateway {
     return result;
   }
 
+  @Override
+  public LlmToolResponse completeWithTools(List<ChatMsg> messages, List<LlmToolSpec> tools) {
+    try {
+      ObjectNode body = objectMapper.createObjectNode();
+      body.put("model", model);
+      ArrayNode msgs = objectMapper.createArrayNode();
+      for (ChatMsg m : messages) {
+        msgs.add(toWireMessage(m));
+      }
+      body.set("messages", msgs);
+      if (tools != null && !tools.isEmpty()) {
+        ArrayNode toolArray = objectMapper.createArrayNode();
+        for (LlmToolSpec spec : tools) {
+          ObjectNode tool = objectMapper.createObjectNode();
+          tool.put("type", "function");
+          ObjectNode fn = objectMapper.createObjectNode();
+          fn.put("name", spec.name());
+          fn.put("description", spec.description());
+          fn.set("parameters", objectMapper.valueToTree(spec.parameters()));
+          tool.set("function", fn);
+          toolArray.add(tool);
+        }
+        body.set("tools", toolArray);
+        body.put("tool_choice", "auto");
+      }
+      if (reasoningEffort != null && !reasoningEffort.isBlank()) {
+        ObjectNode extra = objectMapper.createObjectNode();
+        extra.put("reasoning_effort", reasoningEffort);
+        extra.put("enable_thinking", true);
+        body.set("extra_body", extra);
+        body.put("reasoning_effort", reasoningEffort);
+      }
+      String resp = postWithRetry(baseUrl + "/chat/completions", apiKey, body, 2);
+      return parseToolResponse(resp);
+    } catch (Exception ex) {
+      log.warn("工具对话调用失败已降级 err={}", ex.getMessage());
+      return LlmToolResponse.degraded("");
+    }
+  }
+
+  /** 构造上游消息：assistant 工具调用与 tool 结果需按协议回填。 */
+  private ObjectNode toWireMessage(ChatMsg m) {
+    ObjectNode node = objectMapper.createObjectNode();
+    node.put("role", m.role());
+    if ("tool".equals(m.role())) {
+      node.put("tool_call_id", m.toolCallId() == null ? "" : m.toolCallId());
+      node.put("content", m.content() == null ? "" : m.content());
+      return node;
+    }
+    if (m.toolCallsJson() != null && !m.toolCallsJson().isBlank()) {
+      node.putNull("content");
+      try {
+        node.set("tool_calls", objectMapper.readTree(m.toolCallsJson()));
+      } catch (Exception e) {
+        node.put("content", m.content() == null ? "" : m.content());
+      }
+      return node;
+    }
+    node.put("content", m.content() == null ? "" : m.content());
+    return node;
+  }
+
+  /** 解析带工具调用的响应。 */
+  private LlmToolResponse parseToolResponse(String resp) throws Exception {
+    JsonNode root = objectMapper.readTree(resp);
+    JsonNode message = root.path("choices").path(0).path("message");
+    String content = textOf(message, "content");
+    String thinking = textOf(message, "reasoning_content");
+    if (thinking == null) {
+      thinking = textOf(message, "reasoning");
+    }
+    List<LlmToolCall> calls = new ArrayList<>();
+    JsonNode toolCalls = message.path("tool_calls");
+    if (toolCalls.isArray()) {
+      for (JsonNode tc : toolCalls) {
+        calls.add(new LlmToolCall(
+            tc.path("id").asText(""),
+            tc.path("function").path("name").asText(""),
+            tc.path("function").path("arguments").asText("{}")));
+      }
+    }
+    return new LlmToolResponse(content == null ? "" : content, thinking, calls,
+        toUsage(root.path("usage")), false);
+  }
+
   private ObjectNode chatBody(String systemPrompt, String userPrompt, boolean stream) {
     ObjectNode body = objectMapper.createObjectNode();
     body.put("model", model);

@@ -42,15 +42,26 @@ public class RagAdminController {
     return ApiResponse.ok(Map.of("vectors", vectorStore.count()));
   }
 
-  /** 检索试调用。 */
+  /** 检索试调用：支持多维过滤。 */
   @PostMapping("/retrieve")
   public ApiResponse<Map<String, Object>> retrieve(@RequestBody Map<String, Object> body) {
     String query = String.valueOf(body.getOrDefault("query", ""));
     int topK = body.get("topK") == null ? 5 : Integer.parseInt(String.valueOf(body.get("topK")));
-    String hazard = body.get("hazard") == null ? null : String.valueOf(body.get("hazard"));
-    String standard = body.get("standard") == null ? null : String.valueOf(body.get("standard"));
-    var result = tools.retrieve(query, topK, hazard, standard);
+    var filters = new com.occuspec.rag.ClauseVectorStore.Filters(
+        str(body.get("hazard")), str(body.get("standard")), str(body.get("appendixType")),
+        str(body.get("phase")), str(body.get("checkClass")));
+    var result = tools.retrieve(query, topK, filters);
     return ApiResponse.ok(Map.of("clauses", result.clauses(), "call", result.call()));
+  }
+
+  /** 元数据发现：返回各维度取值与数量，供 Agent 决定过滤策略。 */
+  @GetMapping("/metadata")
+  public ApiResponse<ClauseRetrievalTools.MetadataDiscovery> metadata() {
+    return ApiResponse.ok(tools.describeMetadata());
+  }
+
+  private String str(Object value) {
+    return value == null ? null : String.valueOf(value);
   }
 
   /** 危害路由试调用。 */

@@ -1,7 +1,9 @@
 package com.occuspec.rag;
 
 import java.util.ArrayList;
+import java.util.LinkedHashMap;
 import java.util.List;
+import java.util.Map;
 import org.springframework.beans.factory.annotation.Qualifier;
 import org.springframework.beans.factory.annotation.Value;
 import org.springframework.jdbc.core.JdbcTemplate;
@@ -9,10 +11,37 @@ import org.springframework.stereotype.Component;
 
 /**
  * 条款向量存取：PG halfvec(1024) + HNSW，SQL 直写（向量类型需手工拼接字面量）。
- * 元数据过滤（危害因素/标准号/附录类型）在 SQL 层完成。
+ * 元数据过滤在 SQL 层完成；支持多维度组合、软加权与维度发现。
  */
 @Component
 public class ClauseVectorStore {
+  /** 可为空的过滤条件集合：空值表示该维度不参与过滤。 */
+  public record Filters(
+      String hazardCode, String standardCode, String appendixType, String phase, String checkClass) {
+    public static final Filters NONE = new Filters(null, null, null, null, null);
+
+    /** 是否含至少一个有效条件。 */
+    public boolean anyPresent() {
+      return notBlank(hazardCode) || notBlank(standardCode) || notBlank(appendixType)
+          || notBlank(phase) || notBlank(checkClass);
+    }
+
+    /** 命中的过滤维度个数，用于软加权。 */
+    public int presentCount() {
+      int n = 0;
+      if (notBlank(hazardCode)) n++;
+      if (notBlank(standardCode)) n++;
+      if (notBlank(appendixType)) n++;
+      if (notBlank(phase)) n++;
+      if (notBlank(checkClass)) n++;
+      return n;
+    }
+
+    private static boolean notBlank(String s) {
+      return s != null && !s.isBlank();
+    }
+  }
+
   private final JdbcTemplate pg;
   private final int dimensions;
 
@@ -23,9 +52,10 @@ public class ClauseVectorStore {
     this.dimensions = dimensions;
   }
 
-  /** 命中条款。 */
+  /** 命中条款：distance 为向量距离，metadataHits 为额外命中的元数据维度数。 */
   public record Hit(
-      long clauseId, String standardCode, String clauseNo, String chunkText, double distance, String metadata) {}
+      long clauseId, String standardCode, String clauseNo, String chunkText,
+      double distance, String metadata, int metadataHits) {}
 
   /** 写入单条向量（存在则更新）。 */
   public void upsert(long clauseId, String standardCode, String clauseNo, String chunkText,
@@ -43,27 +73,26 @@ public class ClauseVectorStore {
         clauseId, standardCode, clauseNo, chunkText, literal, metadataJson);
   }
 
-  /** 向量检索：余弦距离排序，支持元数据过滤。 */
-  public List<Hit> search(float[] query, int topK, String hazardCode, String standardCode, String appendixType) {
+  /**
+   * 向量检索：余弦距离排序，支持多维度过滤。
+   * 过滤为硬条件（调用方决定是否放宽），命中维度数用于排序加权。
+   */
+  public List<Hit> search(float[] query, int topK, Filters filters) {
+    Filters f = filters == null ? Filters.NONE : filters;
     StringBuilder sql = new StringBuilder(
-        "SELECT clause_id, standard_code, clause_no, chunk_text,"
-            + " embedding <-> ?::halfvec AS distance, metadata::text AS metadata"
+        "SELECT clause_id, standard_code, clause_no, chunk_text, metadata::text AS metadata,"
+            + " embedding <-> ?::halfvec AS distance,"
+            + hitExpression(f) + " AS metadata_hits"
             + " FROM clause_embedding WHERE 1=1");
     List<Object> args = new ArrayList<>();
     args.add(toLiteral(query));
-    if (hazardCode != null && !hazardCode.isBlank()) {
-      sql.append(" AND metadata->>'hazard_code' = ?");
-      args.add(hazardCode);
-    }
-    if (standardCode != null && !standardCode.isBlank()) {
-      sql.append(" AND standard_code = ?");
-      args.add(standardCode);
-    }
-    if (appendixType != null && !appendixType.isBlank()) {
-      sql.append(" AND metadata->>'appendix_type' = ?");
-      args.add(appendixType);
-    }
-    sql.append(" ORDER BY embedding <-> ?::halfvec LIMIT ?");
+    appendFilter(sql, args, "hazard_code", f.hazardCode());
+    appendFilter(sql, args, "standard_code", f.standardCode());
+    appendFilter(sql, args, "appendix_type", f.appendixType());
+    appendFilter(sql, args, "phase", f.phase());
+    appendFilter(sql, args, "check_class", f.checkClass());
+    // 排序：先按元数据命中维度数降序（软加权），再按向量距离升序
+    sql.append(" ORDER BY metadata_hits DESC, embedding <-> ?::halfvec LIMIT ?");
     args.add(toLiteral(query));
     args.add(topK);
     return pg.query(sql.toString(), args.toArray(), (rs, rowNum) -> new Hit(
@@ -72,13 +101,81 @@ public class ClauseVectorStore {
         rs.getString("clause_no"),
         rs.getString("chunk_text"),
         rs.getDouble("distance"),
-        rs.getString("metadata")));
+        rs.getString("metadata"),
+        rs.getInt("metadata_hits")));
+  }
+
+  /** 统计某元数据维度的取值分布，供 Agent 发现可用过滤值。 */
+  public Map<String, Integer> distribution(String dimension) {
+    String column = switch (dimension) {
+      case "hazard_code" -> "metadata->>'hazard_code'";
+      case "phase" -> "metadata->>'phase'";
+      case "check_class" -> "metadata->>'check_class'";
+      case "appendix_type" -> "metadata->>'appendix_type'";
+      case "standard_code" -> "standard_code";
+      default -> null;
+    };
+    if (column == null) {
+      return Map.of();
+    }
+    Map<String, Integer> result = new LinkedHashMap<>();
+    pg.query(
+        "SELECT " + column + " AS v, COUNT(*) AS c FROM clause_embedding"
+            + " WHERE " + column + " IS NOT NULL AND " + column + " <> ''"
+            + " GROUP BY v ORDER BY c DESC",
+        rs -> {
+          result.put(rs.getString("v"), rs.getInt("c"));
+        });
+    return result;
   }
 
   /** 已入库向量数。 */
   public long count() {
     Long n = pg.queryForObject("SELECT COUNT(*) FROM clause_embedding", Long.class);
     return n == null ? 0 : n;
+  }
+
+  /** 生成元数据命中维度数的 SQL 表达式（用于软加权排序）。 */
+  private String hitExpression(Filters f) {
+    List<String> parts = new ArrayList<>();
+    if (notBlank(f.hazardCode())) {
+      parts.add("CASE WHEN metadata->>'hazard_code' = " + quote(f.hazardCode()) + " THEN 1 ELSE 0 END");
+    }
+    if (notBlank(f.standardCode())) {
+      parts.add("CASE WHEN standard_code = " + quote(f.standardCode()) + " THEN 1 ELSE 0 END");
+    }
+    if (notBlank(f.appendixType())) {
+      parts.add("CASE WHEN metadata->>'appendix_type' = " + quote(f.appendixType()) + " THEN 1 ELSE 0 END");
+    }
+    if (notBlank(f.phase())) {
+      parts.add("CASE WHEN metadata->>'phase' = " + quote(f.phase()) + " THEN 1 ELSE 0 END");
+    }
+    if (notBlank(f.checkClass())) {
+      parts.add("CASE WHEN metadata->>'check_class' = " + quote(f.checkClass()) + " THEN 1 ELSE 0 END");
+    }
+    return parts.isEmpty() ? "0" : String.join(" + ", parts);
+  }
+
+  /** 拼接硬过滤条件（参数化，防注入；值来自受控枚举）。 */
+  private void appendFilter(StringBuilder sql, List<Object> args, String dimension, String value) {
+    if (!notBlank(value)) {
+      return;
+    }
+    if ("standard_code".equals(dimension)) {
+      sql.append(" AND standard_code = ?");
+    } else {
+      sql.append(" AND metadata->>'").append(dimension).append("' = ?");
+    }
+    args.add(value);
+  }
+
+  /** 转义单引号，用于 hitExpression 内联字面量（值来自受控枚举，仍做转义）。 */
+  private String quote(String value) {
+    return "'" + value.replace("'", "''") + "'";
+  }
+
+  private static boolean notBlank(String s) {
+    return s != null && !s.isBlank();
   }
 
   private String toLiteral(float[] vec) {
