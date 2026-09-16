@@ -18,6 +18,7 @@ public class SaTokenConfig implements WebMvcConfigurer {
             "/auth/login",
             "/auth/logout",
             "/admin/standards/import",
+            "/admin/rag/**",
             "/doc.html",
             "/webjars/**",
             "/v3/api-docs/**",
