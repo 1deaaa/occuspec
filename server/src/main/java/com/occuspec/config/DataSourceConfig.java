@@ -1,6 +1,7 @@
 package com.occuspec.config;
 
 import javax.sql.DataSource;
+import org.springframework.beans.factory.annotation.Qualifier;
 import org.springframework.beans.factory.annotation.Value;
 import org.springframework.context.annotation.Bean;
 import org.springframework.context.annotation.Configuration;
@@ -42,8 +43,7 @@ public class DataSourceConfig {
   }
 
   @Bean("pgJdbcTemplate")
-  public JdbcTemplate pgJdbcTemplate(DataSource pgDataSource) {
-    // 注意：参数名显式指定，避免按类型注入时命中主数据源
+  public JdbcTemplate pgJdbcTemplate(@Qualifier("pgDataSource") DataSource pgDataSource) {
     return new JdbcTemplate(pgDataSource);
   }
 }
