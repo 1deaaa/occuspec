@@ -75,26 +75,109 @@ mvn test -Dtest=RetrievalBenchmarkTest
 
 条款内容近乎静态，TTL 设 6 小时；元数据发现为全表聚合，TTL 设 30 分钟。
 
-## 4. 并发与一致性
+### 3.1 命中率与延迟实测
+
+`CacheBenchmarkTest` 实测（一级缓存为进程级单例，测试内先清理再计量）：
+
+| 场景 | 冷回源 | 热命中 | 命中率 |
+|---|---|---|---|
+| 条款精确查询（200 次） | 5 条共 8ms，平均 1.60ms | 200 次共 15ms，平均 0.010ms，P95=0ms | 100% |
+| 模拟热点键（20 键 × 200 次） | 20 次共 312ms，平均 15.10ms | 200 次共 0ms，平均 0.000ms，P95=0ms | 90.9% |
+
+热命中平均耗时较冷回源低约 **2 个数量级**（1.60ms → 0.010ms）。
+命中率未达 100% 时，缺口全部来自冷启动阶段的首轮回源，符合预期。
+
+## 4. 索引与查询计划
+
+### 4.1 向量检索
+
+向量检索原始 SQL 为 `ORDER BY metadata_hits DESC, embedding <-> ? LIMIT k`，
+其中 `metadata_hits` 是计算表达式。**该写法使规划器无法使用 HNSW 索引**，
+实测退化为全表顺序扫描（5933 行，2.8ms，且随数据量线性增长）。
+
+改为两段式查询后（内层 `ORDER BY 距离 LIMIT 候选数`，外层按元数据加权重排）：
+
+| 查询 | 计划 | 耗时 |
+|---|---|---|
+| 原始写法（加权在 ORDER BY 首列） | Seq Scan | 2.83ms |
+| 强制走 HNSW（`enable_seqscan=off`） | Index Scan (hnsw) | 0.85ms |
+
+需要说明的实测事实：当前数据规模（5933 行）下，规划器即使面对两段式写法仍选择
+Seq Scan（约 16ms），因为 pgvector 的成本模型在该规模判断顺序扫描更省。
+HNSW 的收益随数据量增长而显现，两段式改写保证届时无需改代码即可用上索引。
+
+### 4.2 元数据过滤
+
+`V2__vector_index_tuning.sql` 为过滤维度建表达式索引（`metadata->>'xxx'`）：
+
+| 查询 | 索引前 | 索引后 |
+|---|---|---|
+| `hazard_code = 'gbz188-7-1'` | Seq Scan，Rows Removed by Filter 5912，2.8ms | Bitmap Index Scan，0.096ms |
+| `hazard_code + phase` 组合 | Seq Scan | Index Scan，0.012ms |
+
+提升约 **1–2 个数量级**。
+
+### 4.3 关系库查询
+
+MySQL 侧实测（`EXPLAIN`），各高频查询均走索引：
+
+| 查询 | 计划 | 关键索引 |
+|---|---|---|
+| 条款按危害因素 + 排除 DOC 标记 | `ref`，rows=21 | `idx_hazard` |
+| 条款按（标准号，条款编号）精确取 | `const`，rows=1 | `uk_std_clause` |
+| 规则按启用 + 危害因素 | `range`，rows=2 | `idx_enabled_hazard` |
+| 体检明细按 exam_id | `ref`，rows=2 | `idx_exam_item` |
+| 对话消息按 session_id + 时间 | `ref`，rows=2 | `idx_session_time` |
+| 条款按内容哈希去重 | `ref`，rows=1，Using index | `idx_content_hash` |
+
+唯一未走索引的是标题/正文关键词模糊查询（`LIKE '%kw%'`），全表扫描 5682 行。
+该路径仅用于条款浏览页的人工检索，不在判定链路上，暂不引入全文索引。
+
+## 5. 并发与一致性
 
 | 项目 | 实现 | 验证 |
 |---|---|---|
 | 批量任务抢占 | `UPDATE ... WHERE status='PENDING'` 条件更新按影响行数判断归属 | `BatchTaskMapper.claim` |
-| 批量判定并发 | 经 `batchExecutor` 并发执行各条体检 | `BatchTaskService.run` |
+| 批量判定并发 | 经 `assessExecutor`（判定专用池，与调度隔离）并发执行 | `BatchTaskService.run` |
 | 分布式锁释放 | Lua 脚本原子比对 token 后删除，防误删他人锁 | `DistributedLock.tryRun` |
 | 导入事务边界 | 经自身代理调用使 `@Transactional` 生效 | `TransactionRollbackTest` |
+| 判定 Agent 轮次上限 | 模型自主循环，硬性上限 8 轮防无效循环 | `AssessAgentService.MAX_ROUNDS` |
 
-## 5. 判定链路耗时构成
+### 5.1 串行 vs 并发实测
 
-单次判定（含模型渲染）实测：
+`ConcurrencyBenchmarkTest` 用可控延迟模拟 IO 密集任务（40 个任务、单个 20ms、并发度 4）：
+
+| 模式 | 总耗时 | 吞吐 | 峰值并发 |
+|---|---|---|---|
+| 串行 | 1239ms | 32.3 任务/秒 | 1 |
+| 并发（CompletableFuture + Semaphore(4)） | 310ms | 129.0 任务/秒 | 4 |
+
+**加速比 4.00x**，与并发度上限一致。限流有效性单独验证：
+32 线程提交 100 个任务，`Semaphore(4)` 下峰值并发严格为 4，未越界。
+
+真实场景加速比更高：单条判定含模型调用（40–140s），20 条批量任务串行需 15–45 分钟，
+并发 4 路后降至约 1/4。
+
+## 6. 判定链路耗时构成
+
+判定已由固定四步改为 Agent 自主编排（见 `docs/rag-design.md`）。真实上游实测：
+
+| 场景 | 轮次 | 工具调用 | 引用条款 | 总 tokens | 备注 |
+|---|---|---|---|---|---|
+| 噪声（听阈 45 dB） | 7 | 13 | 61 | 113,552 | 自主跨标准检索 GBZ49/GBZT325，结论上调为疑似职业病 |
+| 苯（白细胞 3.2） | 6 | 11 | 72 | 118,433 | 自主检索 GBZ68/GBZT325/GBZT260 |
+
+耗时构成：
 
 | 阶段 | 耗时 |
 |---|---|
-| 危害路由（数据库直查） | 数十毫秒 |
-| 向量检索（含嵌入调用） | 0.3–3 s（取决于嵌入服务响应） |
-| 规则匹配 | 亚毫秒 |
-| 模型渲染（`reasoning_effort=xhigh`） | 40–140 s |
+| 危害路由（数据库直查，走索引） | 数十毫秒 |
+| 每轮向量检索（含嵌入调用） | 0.3–3 s |
+| 规则匹配（下限计算） | 亚毫秒 |
+| 模型推理（`reasoning_effort=xhigh`，6–7 轮） | 3–8 分钟 |
 | 落库（评估+证据+推荐，同一事务） | 数十毫秒 |
 
-模型渲染是绝对瓶颈。生产部署建议：把渲染放到异步流程，判定结论（规则结果）
-先返回，渲染完成后补充说明；或按需下调 `reasoning-effort`。
+模型推理轮次是绝对瓶颈，且随 Agent 自主检索步数增加而增长。
+生产部署建议：判定走 SSE 流式（已有 `/assessments/stream`），
+把工具调用与推理过程实时推送；或按需下调 `reasoning-effort` 换取速度。
+

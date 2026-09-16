@@ -33,9 +33,32 @@ public class HotCache {
   private final ConcurrentHashMap<String, String> local = new ConcurrentHashMap<>();
   /** 单飞表：key → 正在回源的 future。 */
   private final ConcurrentHashMap<String, CompletableFuture<String>> inFlight = new ConcurrentHashMap<>();
+  /** 命中计数：一级命中 + 二级命中。 */
+  private final java.util.concurrent.atomic.AtomicLong hitCount =
+      new java.util.concurrent.atomic.AtomicLong();
+  /** 未命中计数（含空值占位命中）。 */
+  private final java.util.concurrent.atomic.AtomicLong missCount =
+      new java.util.concurrent.atomic.AtomicLong();
 
   public HotCache(StringRedisTemplate redis) {
     this.redis = redis;
+  }
+
+  /** 缓存命中率快照，供运维观测与基准测试。 */
+  public Stats stats() {
+    long hit = hitCount.get();
+    long miss = missCount.get();
+    long total = hit + miss;
+    return new Stats(hit, miss, total, total == 0 ? 0.0 : (double) hit / total);
+  }
+
+  /** 统计快照。 */
+  public record Stats(long hits, long misses, long total, double hitRate) {}
+
+  /** 重置统计（用于基准测试分段计量）。 */
+  public void resetStats() {
+    hitCount.set(0);
+    missCount.set(0);
   }
 
   /**
@@ -49,11 +72,13 @@ public class HotCache {
   public String get(String key, Duration ttl, Supplier<String> loader) {
     String cached = local.get(key);
     if (cached != null) {
+      hitCount.incrementAndGet();
       return NULL_SENTINEL.equals(cached) ? null : cached;
     }
     try {
       String fromRedis = redis.opsForValue().get(key);
       if (fromRedis != null) {
+        hitCount.incrementAndGet();
         local.put(key, fromRedis);
         return NULL_SENTINEL.equals(fromRedis) ? null : fromRedis;
       }
@@ -64,6 +89,8 @@ public class HotCache {
     CompletableFuture<String> mine = new CompletableFuture<>();
     CompletableFuture<String> existing = inFlight.putIfAbsent(key, mine);
     if (existing != null) {
+      // 等待期内的调用复用同一次回源结果，仍视为命中
+      hitCount.incrementAndGet();
       try {
         return existing.join();
       } catch (Exception ex) {
@@ -71,6 +98,7 @@ public class HotCache {
         return loader.get();
       }
     }
+    missCount.incrementAndGet();
     try {
       String value = loader.get();
       String stored = value == null ? NULL_SENTINEL : value;

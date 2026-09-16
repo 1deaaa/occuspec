@@ -157,6 +157,11 @@ public class ClauseRetrievalTools {
   public record MetadataDiscovery(
       Map<String, Map<String, Integer>> dimensions, Map<String, String> hazardNames, String hint) {}
 
+  /** 缓存统计：供运维观测与基准测试读取。 */
+  public HotCache.Stats cacheStats() {
+    return hotCache.stats();
+  }
+
   /** 按（标准号，条款编号）精确取条款原文与页码。 */
   public RetrievalResult fetch(String standardCode, String clauseNo) {
     Map<String, Object> args = new HashMap<>();
