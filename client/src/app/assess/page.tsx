@@ -1,18 +1,24 @@
 "use client";
 
 import { useState } from "react";
+import { FlaskConical } from "lucide-react";
+
+import { Button } from "@/components/ui/button";
+import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
+import { Input } from "@/components/ui/input";
+import { ScrollArea } from "@/components/ui/scroll-area";
+import { ReasoningFold } from "@/components/chat/reasoning-fold";
+import { ToolTraceList } from "@/components/chat/tool-trace-list";
+import { UsageBar } from "@/components/chat/usage-bar";
 import { streamAssess, type StreamEvent } from "@/lib/api";
 import { useI18n } from "@/i18n/provider";
-import { ReasoningFold } from "@/components/reasoning-fold";
-import { ToolList, type ToolEntry } from "@/components/tool-list";
-import { UsageBar } from "@/components/usage-bar";
 
 export default function AssessPage() {
   const { t } = useI18n();
   const [examId, setExamId] = useState("");
   const [running, setRunning] = useState(false);
-  const [reasoning, setReasoning] = useState<string[]>([]);
-  const [tools, setTools] = useState<ToolEntry[]>([]);
+  const [reasoning, setReasoning] = useState("");
+  const [traces, setTraces] = useState<{ tool: string; args?: Record<string, unknown>; hits: number; note: string }[]>([]);
   const [content, setContent] = useState("");
   const [usage, setUsage] = useState({ prompt: 0, completion: 0, total: 0 });
   const [done, setDone] = useState<Record<string, unknown> | null>(null);
@@ -20,24 +26,29 @@ export default function AssessPage() {
 
   const start = async () => {
     setRunning(true);
-    setReasoning([]);
-    setTools([]);
+    setReasoning("");
+    setTraces([]);
     setContent("");
     setUsage({ prompt: 0, completion: 0, total: 0 });
     setDone(null);
     setError("");
-    const pendingTools = new Map<string, ToolEntry>();
     try {
       await streamAssess(Number(examId), (event: StreamEvent) => {
         if (event.type === "reasoning") {
-          setReasoning((prev) => [...prev, event.text]);
+          setReasoning((prev) => prev + event.text);
         } else if (event.type === "tool_call") {
-          pendingTools.set(event.tool, { tool: event.tool, args: event.args });
-          setTools(Array.from(pendingTools.values()));
+          setTraces((prev) => [...prev, { tool: event.tool, args: event.args, hits: 0, note: "" }]);
         } else if (event.type === "tool_result") {
-          const prev = pendingTools.get(event.tool) ?? { tool: event.tool };
-          pendingTools.set(event.tool, { ...prev, hits: event.hits, note: event.note });
-          setTools(Array.from(pendingTools.values()));
+          setTraces((prev) => {
+            const next = [...prev];
+            for (let i = next.length - 1; i >= 0; i--) {
+              if (next[i].tool === event.tool && next[i].hits === 0) {
+                next[i] = { ...next[i], hits: event.hits, note: event.note };
+                break;
+              }
+            }
+            return next;
+          });
         } else if (event.type === "content") {
           setContent((prev) => prev + event.delta);
         } else if (event.type === "token_usage") {
@@ -49,50 +60,59 @@ export default function AssessPage() {
         }
       });
     } catch (e) {
-      setError(e instanceof Error ? e.message : "流式判定失败");
+      setError(e instanceof Error ? e.message : t("assess.failed"));
     } finally {
       setRunning(false);
     }
   };
 
   return (
-    <div className="flex flex-col gap-3">
-      <div className="card p-4">
-        <h1 className="text-xl font-bold">{t("nav.assess")}</h1>
-        <div className="mt-3 flex gap-2">
-          <input
-            className="w-48 border border-line px-2 py-2 text-sm"
-            placeholder="体检记录 examId"
-            value={examId}
-            onChange={(e) => setExamId(e.target.value)}
-          />
-          <button className="btn-primary px-4 py-2 text-sm font-semibold" disabled={running || !examId} onClick={start}>
-            {running ? t("common.loading") : t("assess.stream")}
-          </button>
-        </div>
-        {error && <div className="mt-2 text-sm text-red-700">{error}</div>}
+    <ScrollArea className="h-full">
+      <div className="mx-auto flex w-full max-w-4xl flex-col gap-3 p-4">
+        <Card>
+          <CardHeader>
+            <CardTitle className="flex items-center gap-2">
+              <FlaskConical className="size-4 text-primary" />
+              {t("nav.assess")}
+            </CardTitle>
+          </CardHeader>
+          <CardContent className="flex gap-2">
+            <Input
+              className="max-w-xs"
+              placeholder={t("assess.examIdPlaceholder")}
+              value={examId}
+              onChange={(e) => setExamId(e.target.value)}
+            />
+            <Button disabled={running || !examId} onClick={start}>
+              {running ? t("common.loading") : t("assess.stream")}
+            </Button>
+          </CardContent>
+        </Card>
+
+        {error && <div className="border border-destructive bg-card p-2 text-sm text-destructive">{error}</div>}
+        <ReasoningFold text={reasoning} streaming={running && !done} />
+        <ToolTraceList traces={traces} streaming={running && !done} />
+        {(content || running) && (
+          <Card>
+            <CardContent className="pt-4 text-sm leading-7 whitespace-pre-wrap">
+              <span className={running && !done ? "stream-caret" : ""}>{content}</span>
+            </CardContent>
+          </Card>
+        )}
+        {(usage.total > 0 || done) && <UsageBar prompt={usage.prompt} completion={usage.completion} total={usage.total} />}
+        {done && (
+          <Card>
+            <CardHeader>
+              <CardTitle>{String(done["conclusionLabel"] ?? done["conclusion"] ?? "")}</CardTitle>
+            </CardHeader>
+            <CardContent>
+              <a className="text-sm text-primary hover:underline" href={`/reports/${String(done["assessmentId"])}`}>
+                {t("assess.viewReport")} #{String(done["assessmentId"])}
+              </a>
+            </CardContent>
+          </Card>
+        )}
       </div>
-      <ReasoningFold texts={reasoning} />
-      <div>
-        <h2 className="mb-1 text-sm font-bold">{t("assess.tools")}</h2>
-        <ToolList entries={tools} />
-      </div>
-      <div className="card min-h-24 p-3">
-        <div className={`whitespace-pre-wrap text-sm leading-7 ${running && !done ? "stream-caret" : ""}`}>
-          {content || <span className="text-muted">等待正文输出…</span>}
-        </div>
-      </div>
-      <UsageBar prompt={usage.prompt} completion={usage.completion} total={usage.total} />
-      {done && (
-        <div className="card p-3 text-sm">
-          <div>
-            结论：<strong>{String(done["conclusionLabel"] ?? done["conclusion"] ?? "")}</strong>
-          </div>
-          <a className="text-brand" href={`/reports/${String(done["assessmentId"])}`}>
-            查看完整报告 #{String(done["assessmentId"])}
-          </a>
-        </div>
-      )}
-    </div>
+    </ScrollArea>
   );
 }

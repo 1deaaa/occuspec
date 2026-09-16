@@ -2,72 +2,102 @@
 @tailwind components;
 @tailwind utilities;
 
-:root {
-  --ink: #0a1628;
-  --blue: #0b5fff;
-  --blue-dark: #0849c4;
-  --line: #dbe4f0;
-  --bg: #f4f7fc;
-  --card: #ffffff;
-  --muted: #5b6b82;
+@layer base {
+  :root {
+    /* 蓝白黑专业配色，全部直角锐利风格 */
+    --background: 210 40% 98%;
+    --foreground: 216 60% 10%;
+
+    --card: 0 0% 100%;
+    --card-foreground: 216 60% 10%;
+
+    --popover: 0 0% 100%;
+    --popover-foreground: 216 60% 10%;
+
+    --primary: 219 100% 52%;
+    --primary-foreground: 0 0% 100%;
+
+    --secondary: 218 40% 96%;
+    --secondary-foreground: 216 60% 10%;
+
+    --muted: 216 30% 96%;
+    --muted-foreground: 215 18% 43%;
+
+    --accent: 220 87% 94%;
+    --accent-foreground: 216 60% 10%;
+
+    --destructive: 0 72% 51%;
+    --destructive-foreground: 0 0% 100%;
+
+    --border: 214 41% 90%;
+    --input: 214 41% 90%;
+    --ring: 219 100% 52%;
+
+    /* 直角风格：半径为 0 */
+    --radius: 0rem;
+  }
 }
 
-/* 蓝白黑锐利风：全部直角、无圆角 */
-* {
-  border-radius: 0 !important;
+@layer base {
+  * {
+    @apply border-border;
+  }
+
+  /* 用户明确要求全部直角方形与锐利风格 */
+  *,
+  *::before,
+  *::after {
+    border-radius: 0 !important;
+  }
+
+  html,
+  body {
+    @apply bg-background text-foreground;
+    height: 100%;
+  }
+
+  body {
+    font-family: "Segoe UI", "Microsoft YaHei", system-ui, -apple-system, sans-serif;
+    overflow: hidden;
+  }
+
+  /* 细窄滚动条，匹配锐利风格 */
+  ::-webkit-scrollbar {
+    width: 8px;
+    height: 8px;
+  }
+
+  ::-webkit-scrollbar-track {
+    background: hsl(var(--muted));
+  }
+
+  ::-webkit-scrollbar-thumb {
+    background: hsl(var(--border));
+    border: 2px solid hsl(var(--muted));
+  }
+
+  ::-webkit-scrollbar-thumb:hover {
+    background: hsl(var(--muted-foreground));
+  }
 }
 
-html,
-body {
-  background: var(--bg);
-  color: var(--ink);
-  font-family: "Segoe UI", "Microsoft YaHei", system-ui, sans-serif;
-}
+@layer utilities {
+  /* 非线性缓动：专业界面用平滑减速，避免机械感 */
+  .ease-sharp {
+    transition-timing-function: cubic-bezier(0.22, 0.9, 0.24, 1);
+  }
 
-/* 细节过渡动画：非线性缓动 */
-.transition-sharp {
-  transition: all 0.22s cubic-bezier(0.22, 0.9, 0.24, 1);
-}
+  /* 流式输出光标 */
+  .stream-caret::after {
+    content: "▍";
+    color: hsl(var(--primary));
+    animation: caret-blink 0.9s steps(1) infinite;
+  }
 
-.card {
-  background: var(--card);
-  border: 1px solid var(--line);
-}
-
-.btn-primary {
-  background: var(--blue);
-  color: #fff;
-  transition: background 0.22s cubic-bezier(0.22, 0.9, 0.24, 1), transform 0.18s ease;
-}
-
-.btn-primary:hover {
-  background: var(--blue-dark);
-}
-
-.btn-primary:active {
-  transform: translateY(1px);
-}
-
-.nav-item {
-  border-left: 3px solid transparent;
-  transition: border-color 0.2s ease, background 0.22s cubic-bezier(0.22, 0.9, 0.24, 1);
-}
-
-.nav-item:hover {
-  background: #e8eefb;
-}
-
-.nav-item.active {
-  border-left-color: var(--blue);
-  background: #e2ebfd;
-  color: var(--ink);
-}
-
-/* 流式文本光标 */
-.stream-caret::after {
-  content: "▍";
-  color: var(--blue);
-  animation: caret-blink 0.9s steps(1) infinite;
+  /* 工具调用条目滑入 */
+  .slide-in {
+    animation: slide-in 0.25s cubic-bezier(0.22, 0.9, 0.24, 1);
+  }
 }
 
 @keyframes caret-blink {
@@ -76,24 +106,6 @@ body {
   }
 }
 
-/* 可折叠推理块展开动画 */
-.fold-body {
-  display: grid;
-  grid-template-rows: 1fr;
-  transition: grid-template-rows 0.28s cubic-bezier(0.22, 0.9, 0.24, 1), opacity 0.25s ease;
-  opacity: 1;
-}
-
-.fold-body.collapsed {
-  grid-template-rows: 0fr;
-  opacity: 0;
-}
-
-.fold-inner {
-  overflow: hidden;
-}
-
-/* 工具调用条目滑入 */
 @keyframes slide-in {
   from {
     opacity: 0;
@@ -105,15 +117,21 @@ body {
   }
 }
 
-.tool-entry {
-  animation: slide-in 0.25s cubic-bezier(0.22, 0.9, 0.24, 1);
+/* 可折叠块：grid 行高过渡，内容高度自适应且动画平滑 */
+.fold-grid {
+  display: grid;
+  grid-template-rows: 1fr;
+  transition: grid-template-rows 0.28s cubic-bezier(0.22, 0.9, 0.24, 1),
+    opacity 0.25s cubic-bezier(0.22, 0.9, 0.24, 1);
+  opacity: 1;
 }
 
-/* 表格行悬停 */
-.row-hover {
-  transition: background 0.18s ease;
+.fold-grid.collapsed {
+  grid-template-rows: 0fr;
+  opacity: 0;
 }
 
-.row-hover:hover {
-  background: #eef3fd;
+.fold-grid > * {
+  overflow: hidden;
+  min-height: 0;
 }

@@ -1,65 +1,176 @@
 "use client";
 
-import { useState } from "react";
-import { getToken } from "@/lib/api";
+import { useRef, useState } from "react";
+import { Layers, Upload } from "lucide-react";
+
+import { Badge } from "@/components/ui/badge";
+import { Button } from "@/components/ui/button";
+import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
+import { Input } from "@/components/ui/input";
+import { ScrollArea } from "@/components/ui/scroll-area";
+import { apiFetch, getToken } from "@/lib/api";
 import { useI18n } from "@/i18n/provider";
+
+interface TaskView {
+  taskId: number;
+  type: string;
+  status: string;
+  total: number;
+  success: number;
+  fail: number;
+}
 
 export default function BatchPage() {
   const { t } = useI18n();
+  const [tasks, setTasks] = useState<TaskView[]>([]);
   const [taskId, setTaskId] = useState("");
-  const [status, setStatus] = useState("");
+  const [message, setMessage] = useState("");
+  const fileRef = useRef<HTMLInputElement>(null);
 
-  const authed = (init?: RequestInit): RequestInit => {
-    const headers = new Headers(init?.headers);
+  const reload = () =>
+    apiFetch<{ data: TaskView[] }>("/batch-tasks?page=1&pageSize=20")
+      .then((data) => setTasks(data.data ?? []))
+      .catch(() => setTasks([]));
+
+  const upload = async () => {
+    const file = fileRef.current?.files?.[0];
+    if (!file) return;
+    setMessage("");
+    const form = new FormData();
+    form.append("file", file);
+    try {
+      const data = await apiFetch<{ taskId: number }>("/batch-tasks/upload-csv", {
+        method: "POST",
+        body: form,
+      });
+      setTaskId(String(data.taskId));
+      setMessage(t("batch.uploaded", { id: data.taskId }));
+      reload();
+    } catch (e) {
+      setMessage(e instanceof Error ? e.message : t("batch.uploadFailed"));
+    }
+  };
+
+  /** Excel 导出走原生下载，需带 token 头，故用 fetch + blob。 */
+  const exportXlsx = async (id: string) => {
     const token = getToken();
-    if (token) headers.set("satoken", token);
-    return { ...init, headers };
+    const resp = await fetch(`/backend/batch-tasks/${id}/export-xlsx`, {
+      headers: token ? { satoken: token } : {},
+    });
+    if (!resp.ok) {
+      setMessage(t("batch.exportFailed"));
+      return;
+    }
+    const blob = await resp.blob();
+    const url = URL.createObjectURL(blob);
+    const anchor = document.createElement("a");
+    anchor.href = url;
+    anchor.download = `batch-${id}.xlsx`;
+    anchor.click();
+    URL.revokeObjectURL(url);
   };
 
   return (
-    <div className="flex flex-col gap-3">
-      <div className="card p-4">
-        <h1 className="text-xl font-bold">{t("nav.batch")}</h1>
-        <input
-          type="file"
-          accept=".csv"
-          className="mt-2 text-sm"
-          onChange={async (e) => {
-            const file = e.target.files?.[0];
-            if (!file) return;
-            const form = new FormData();
-            form.append("file", file);
-            const resp = await fetch("/backend/batch-tasks/upload-csv", authed({ method: "POST", body: form }));
-            const data = await resp.json();
-            setTaskId(String(data.data?.taskId ?? ""));
-            setStatus(JSON.stringify(data.data ?? {}));
-          }}
-        />
-        {status && <div className="mt-2 text-sm">{status}</div>}
+    <ScrollArea className="h-full">
+      <div className="mx-auto flex w-full max-w-4xl flex-col gap-3 p-4">
+        <Card>
+          <CardHeader>
+            <CardTitle className="flex items-center gap-2">
+              <Layers className="size-4 text-primary" />
+              {t("nav.batch")}
+            </CardTitle>
+          </CardHeader>
+          <CardContent className="flex flex-col gap-2">
+            <div className="flex flex-wrap items-center gap-2">
+              <input
+                ref={fileRef}
+                type="file"
+                accept=".csv"
+                className="text-sm file:mr-2 file:border file:bg-background file:px-2 file:py-1 file:text-xs"
+              />
+              <Button size="sm" onClick={upload}>
+                <Upload />
+                {t("batch.upload")}
+              </Button>
+            </div>
+            <div className="flex flex-wrap items-center gap-2">
+              <Input
+                className="max-w-xs"
+                placeholder={t("batch.taskIdPlaceholder")}
+                value={taskId}
+                onChange={(e) => setTaskId(e.target.value)}
+              />
+              <Button
+                variant="outline"
+                size="sm"
+                onClick={async () => {
+                  if (!taskId) return;
+                  try {
+                    const data = await apiFetch<TaskView>(`/batch-tasks/${taskId}`);
+                    setMessage(
+                      `${t("batch.status")}: ${data.status} (${data.success}/${data.total})`,
+                    );
+                  } catch (e) {
+                    setMessage(e instanceof Error ? e.message : t("batch.queryFailed"));
+                  }
+                }}
+              >
+                {t("batch.queryStatus")}
+              </Button>
+              <Button variant="outline" size="sm" onClick={() => taskId && exportXlsx(taskId)}>
+                {t("action.export")}
+              </Button>
+            </div>
+            {message && <div className="text-sm text-muted-foreground">{message}</div>}
+          </CardContent>
+        </Card>
+
+        <Button variant="outline" size="sm" className="self-start" onClick={reload}>
+          {t("batch.refreshList")}
+        </Button>
+
+        <Card>
+          <CardContent className="pt-4">
+            <table className="w-full text-sm">
+              <thead>
+                <tr className="border-b text-left text-xs text-muted-foreground">
+                  <th className="py-2">ID</th>
+                  <th>{t("batch.status")}</th>
+                  <th>{t("batch.total")}</th>
+                  <th>{t("batch.success")}</th>
+                  <th>{t("batch.fail")}</th>
+                  <th />
+                </tr>
+              </thead>
+              <tbody>
+                {tasks.map((task) => (
+                  <tr key={task.taskId} className="border-b transition-colors ease-sharp hover:bg-accent/50">
+                    <td className="py-2 font-mono text-xs">#{task.taskId}</td>
+                    <td>
+                      <Badge
+                        variant={
+                          task.status === "SUCCESS" ? "success" : task.status === "FAILED" ? "destructive" : "warning"
+                        }
+                      >
+                        {task.status}
+                      </Badge>
+                    </td>
+                    <td>{task.total}</td>
+                    <td>{task.success}</td>
+                    <td>{task.fail}</td>
+                    <td>
+                      <Button variant="ghost" size="sm" onClick={() => exportXlsx(String(task.taskId))}>
+                        {t("action.export")}
+                      </Button>
+                    </td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+            {tasks.length === 0 && <div className="py-4 text-sm text-muted-foreground">{t("common.empty")}</div>}
+          </CardContent>
+        </Card>
       </div>
-      <div className="card p-4">
-        <div className="flex gap-2">
-          <input
-            className="w-48 border border-line px-2 py-2 text-sm"
-            placeholder="任务 taskId"
-            value={taskId}
-            onChange={(e) => setTaskId(e.target.value)}
-          />
-          <button
-            className="transition-sharp border border-line bg-white px-3 py-2 text-sm"
-            onClick={async () => {
-              const resp = await fetch(`/backend/batch-tasks/${taskId}`, authed());
-              const data = await resp.json();
-              setStatus(JSON.stringify(data.data ?? data));
-            }}
-          >
-            状态轮询
-          </button>
-          <a className="btn-primary px-3 py-2 text-sm" href={`/backend/batch-tasks/${taskId}/export-xlsx`}>
-            {t("action.export")}
-          </a>
-        </div>
-      </div>
-    </div>
+    </ScrollArea>
   );
 }

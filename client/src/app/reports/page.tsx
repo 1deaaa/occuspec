@@ -1,15 +1,22 @@
 "use client";
 
-import Link from "next/link";
 import { useEffect, useState } from "react";
+import { FileText } from "lucide-react";
+
+import { Badge } from "@/components/ui/badge";
+import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
+import { ScrollArea } from "@/components/ui/scroll-area";
 import { apiFetch } from "@/lib/api";
 import { useI18n } from "@/i18n/provider";
 
 interface Row {
   assessmentId: number;
+  examId: number;
+  conclusion: string;
   conclusionLabel: string;
   reviewStatus: string;
   totalTokens: number;
+  createdAt: string;
 }
 
 export default function ReportsPage() {
@@ -17,38 +24,56 @@ export default function ReportsPage() {
   const [rows, setRows] = useState<Row[]>([]);
 
   useEffect(() => {
-    apiFetch<{ data: Row[] }>("/assessments?page=1&pageSize=20")
-      .then((d) => setRows(d.data ?? []))
+    apiFetch<{ data: Row[] }>("/assessments?page=1&pageSize=50")
+      .then((data) => setRows(data.data ?? []))
       .catch(() => setRows([]));
   }, []);
 
   return (
-    <div className="card p-4">
-      <h1 className="text-xl font-bold">{t("nav.reports")}</h1>
-      <table className="mt-3 w-full text-sm">
-        <thead>
-          <tr className="border-b border-line text-left text-muted">
-            <th className="py-1">评估</th>
-            <th>结论</th>
-            <th>复核</th>
-            <th>用量</th>
-          </tr>
-        </thead>
-        <tbody>
-          {rows.map((row) => (
-            <tr key={row.assessmentId} className="row-hover border-b border-line">
-              <td className="py-1">
-                <Link className="text-brand" href={`/reports/${row.assessmentId}`}>
-                  #{row.assessmentId}
-                </Link>
-              </td>
-              <td>{row.conclusionLabel}</td>
-              <td>{row.reviewStatus}</td>
-              <td>{row.totalTokens}</td>
-            </tr>
-          ))}
-        </tbody>
-      </table>
-    </div>
+    <ScrollArea className="h-full">
+      <div className="mx-auto w-full max-w-5xl p-4">
+        <Card>
+          <CardHeader>
+            <CardTitle className="flex items-center gap-2">
+              <FileText className="size-4 text-primary" />
+              {t("nav.reports")}
+            </CardTitle>
+          </CardHeader>
+          <CardContent>
+            <table className="w-full text-sm">
+              <thead>
+                <tr className="border-b text-left text-xs text-muted-foreground">
+                  <th className="py-2">ID</th>
+                  <th>{t("reports.conclusion")}</th>
+                  <th>{t("reports.review")}</th>
+                  <th>{t("reports.tokens")}</th>
+                  <th />
+                </tr>
+              </thead>
+              <tbody>
+                {rows.map((row) => (
+                  <tr key={row.assessmentId} className="border-b transition-colors ease-sharp hover:bg-accent/50">
+                    <td className="py-2 font-mono text-xs">#{row.assessmentId}</td>
+                    <td>{row.conclusionLabel}</td>
+                    <td>
+                      <Badge variant={row.reviewStatus === "REVIEWED" ? "success" : "warning"}>
+                        {row.reviewStatus === "REVIEWED" ? t("common.reviewed") : t("common.reviewPending")}
+                      </Badge>
+                    </td>
+                    <td>{row.totalTokens}</td>
+                    <td>
+                      <a className="text-primary hover:underline" href={`/reports/${row.assessmentId}`}>
+                        {t("reports.detail")}
+                      </a>
+                    </td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+            {rows.length === 0 && <div className="py-4 text-sm text-muted-foreground">{t("common.empty")}</div>}
+          </CardContent>
+        </Card>
+      </div>
+    </ScrollArea>
   );
 }

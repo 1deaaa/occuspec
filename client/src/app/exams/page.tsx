@@ -1,6 +1,12 @@
 "use client";
 
 import { useEffect, useState } from "react";
+import { ClipboardList, Plus, Trash2 } from "lucide-react";
+
+import { Button } from "@/components/ui/button";
+import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
+import { Input } from "@/components/ui/input";
+import { ScrollArea } from "@/components/ui/scroll-area";
 import { apiFetch } from "@/lib/api";
 import { useI18n } from "@/i18n/provider";
 
@@ -10,7 +16,8 @@ interface Hazard {
   category: string;
 }
 
-interface ExamItem {
+/** 检查项行：可自由增删、自定义名称，不再固定枚举。 */
+interface ItemRow {
   itemCode: string;
   itemName: string;
   valueNum?: number;
@@ -18,130 +25,184 @@ interface ExamItem {
   unit?: string;
 }
 
-const COMMON_ITEMS: ExamItem[] = [
-  { itemCode: "hearing_avg_db", itemName: "双耳高频平均听阈", unit: "dB" },
-  { itemCode: "blood_lead_umol", itemName: "血铅", unit: "μmol/L" },
-  { itemCode: "wbc", itemName: "白细胞", unit: "10^9/L" },
-  { itemCode: "alt", itemName: "谷丙转氨酶", unit: "U/L" },
-];
+let rowSeq = 0;
+
+function emptyRow(): ItemRow {
+  rowSeq += 1;
+  return { itemCode: `item_${rowSeq}_${Date.now()}`, itemName: "", unit: "" };
+}
 
 export default function ExamsPage() {
   const { t } = useI18n();
   const [hazards, setHazards] = useState<Hazard[]>([]);
   const [name, setName] = useState("");
-  const [hazardCode, setHazardCode] = useState("noise");
-  const [examDate, setExamDate] = useState("2026-09-01");
-  const [items, setItems] = useState<ExamItem[]>(COMMON_ITEMS);
+  const [hazardCode, setHazardCode] = useState("");
+  const [examDate, setExamDate] = useState(new Date().toISOString().slice(0, 10));
+  const [items, setItems] = useState<ItemRow[]>([emptyRow()]);
   const [result, setResult] = useState("");
   const [error, setError] = useState("");
+  const [submitting, setSubmitting] = useState(false);
 
   useEffect(() => {
     apiFetch<{ data: Hazard[] }>("/hazards")
-      .then((d) => setHazards(d.data ?? []))
+      .then((data) => {
+        const list = data.data ?? [];
+        setHazards(list);
+        if (list.length > 0) setHazardCode((prev) => prev || list[0].code);
+      })
       .catch(() => setHazards([]));
   }, []);
 
-  const setItem = (idx: number, patch: Partial<ExamItem>) => {
-    setItems((prev) => prev.map((it, i) => (i === idx ? { ...it, ...patch } : it)));
+  const patchRow = (index: number, patch: Partial<ItemRow>) => {
+    setItems((prev) => prev.map((row, i) => (i === index ? { ...row, ...patch } : row)));
+  };
+
+  const submit = async () => {
+    setError("");
+    setResult("");
+    const filled = items.filter(
+      (item) => item.itemName.trim() !== "" && (item.valueNum !== undefined || (item.valueText ?? "") !== ""),
+    );
+    if (filled.length === 0) {
+      setError(t("exam.needOneItem"));
+      return;
+    }
+    setSubmitting(true);
+    try {
+      const person = await apiFetch<{ personId: number }>("/persons", {
+        method: "POST",
+        body: JSON.stringify({ name: name || t("exam.anonymous"), exposureHistory: hazardCode }),
+      });
+      const exam = await apiFetch<{ examId: number }>("/exams", {
+        method: "POST",
+        headers: { "Idempotency-Key": `exam-${Date.now()}` },
+        body: JSON.stringify({
+          personId: person.personId,
+          hazardCode,
+          examDate,
+          items: filled.map((item) => ({
+            itemCode: item.itemCode,
+            itemName: item.itemName,
+            valueNum: item.valueNum ?? null,
+            valueText: item.valueText ?? "",
+            unit: item.unit ?? "",
+          })),
+        }),
+      });
+      setResult(t("exam.created", { id: exam.examId }));
+    } catch (e) {
+      setError(e instanceof Error ? e.message : t("exam.submitFailed"));
+    } finally {
+      setSubmitting(false);
+    }
   };
 
   return (
-    <div className="flex flex-col gap-3">
-      <div className="card p-4">
-        <h1 className="text-xl font-bold">{t("nav.exams")}</h1>
-        <div className="mt-3 grid grid-cols-2 gap-3 text-sm">
-          <label>
-            {t("exam.person")}
-            <input
-              className="transition-sharp mt-1 w-full border border-line px-2 py-2"
-              value={name}
-              onChange={(e) => setName(e.target.value)}
-              placeholder="姓名（将自动建档）"
-            />
-          </label>
-          <label>
-            {t("exam.hazard")}
-            <select
-              className="mt-1 w-full border border-line bg-white px-2 py-2"
-              value={hazardCode}
-              onChange={(e) => setHazardCode(e.target.value)}
-            >
-              {hazards.map((h) => (
-                <option key={h.code} value={h.code}>
-                  {h.name}
-                </option>
-              ))}
-            </select>
-          </label>
-          <label>
-            {t("exam.date")}
-            <input
-              type="date"
-              className="mt-1 w-full border border-line px-2 py-2"
-              value={examDate}
-              onChange={(e) => setExamDate(e.target.value)}
-            />
-          </label>
-        </div>
-      </div>
-      <div className="card p-4">
-        <h2 className="text-sm font-bold">{t("exam.items")}</h2>
-        <div className="mt-2 flex flex-col gap-2">
-          {items.map((item, idx) => (
-            <div key={item.itemCode} className="grid grid-cols-4 gap-2 text-sm">
-              <span className="py-2">{item.itemName}</span>
-              <input
-                className="border border-line px-2 py-1"
-                placeholder="数值"
-                value={item.valueNum ?? ""}
-                onChange={(e) =>
-                  setItem(idx, { valueNum: e.target.value === "" ? undefined : Number(e.target.value) })
-                }
+    <ScrollArea className="h-full">
+      <div className="mx-auto flex w-full max-w-5xl flex-col gap-3 p-4">
+        <Card>
+          <CardHeader>
+            <CardTitle className="flex items-center gap-2">
+              <ClipboardList className="size-4 text-primary" />
+              {t("nav.exams")}
+            </CardTitle>
+          </CardHeader>
+          <CardContent className="grid grid-cols-1 gap-3 md:grid-cols-3">
+            <label className="text-sm">
+              {t("exam.person")}
+              <Input
+                className="mt-1"
+                value={name}
+                onChange={(e) => setName(e.target.value)}
+                placeholder={t("exam.personPlaceholder")}
               />
-              <input
-                className="border border-line px-2 py-1"
-                placeholder="文本"
-                value={item.valueText ?? ""}
-                onChange={(e) => setItem(idx, { valueText: e.target.value })}
-              />
-              <span className="py-2 text-muted">{item.unit}</span>
+            </label>
+            <label className="text-sm">
+              {t("exam.hazard")}
+              <select
+                className="mt-1 h-9 w-full border border-input bg-background px-3 text-sm focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
+                value={hazardCode}
+                onChange={(e) => setHazardCode(e.target.value)}
+              >
+                {hazards.map((hazard) => (
+                  <option key={hazard.code} value={hazard.code}>
+                    {hazard.name}（{hazard.category}）
+                  </option>
+                ))}
+              </select>
+            </label>
+            <label className="text-sm">
+              {t("exam.date")}
+              <Input className="mt-1" type="date" value={examDate} onChange={(e) => setExamDate(e.target.value)} />
+            </label>
+          </CardContent>
+        </Card>
+
+        <Card>
+          <CardHeader className="flex-row items-center justify-between space-y-0">
+            <CardTitle>{t("exam.items")}</CardTitle>
+            <Button variant="outline" size="sm" onClick={() => setItems((prev) => [...prev, emptyRow()])}>
+              <Plus />
+              {t("action.addRow")}
+            </Button>
+          </CardHeader>
+          <CardContent className="flex flex-col gap-2">
+            {/* 表头 */}
+            <div className="hidden grid-cols-[2fr_1fr_1fr_1fr_auto] gap-2 text-xs text-muted-foreground md:grid">
+              <span>{t("exam.itemName")}</span>
+              <span>{t("exam.value")}</span>
+              <span>{t("exam.text")}</span>
+              <span>{t("exam.unit")}</span>
+              <span />
             </div>
-          ))}
-        </div>
-        {error && <div className="mt-2 text-sm text-red-700">{error}</div>}
-        {result && <div className="mt-2 text-sm text-green-800">{result}</div>}
-        <button
-          className="btn-primary mt-3 px-4 py-2 text-sm font-semibold"
-          onClick={async () => {
-            setError("");
-            setResult("");
-            try {
-              const person = await apiFetch<{ personId: number }>("/persons", {
-                method: "POST",
-                body: JSON.stringify({ name: name || "未命名", exposureHistory: hazardCode }),
-              });
-              const payload = {
-                personId: person.personId,
-                hazardCode,
-                examDate,
-                items: items
-                  .filter((it) => it.valueNum !== undefined || (it.valueText ?? "") !== "")
-                  .map((it) => ({ ...it, unit: it.unit ?? "" })),
-              };
-              const exam = await apiFetch<{ examId: number }>("/exams", {
-                method: "POST",
-                headers: { "Idempotency-Key": `exam-${Date.now()}` },
-                body: JSON.stringify(payload),
-              });
-              setResult(`录入成功，体检记录 #${exam.examId}，可前往智能判定页发起判定。`);
-            } catch (e) {
-              setError(e instanceof Error ? e.message : "提交失败");
-            }
-          }}
-        >
-          {t("action.submit")}
-        </button>
+            {items.map((item, index) => (
+              <div
+                key={item.itemCode}
+                className="slide-in grid grid-cols-1 gap-2 md:grid-cols-[2fr_1fr_1fr_1fr_auto]"
+              >
+                <Input
+                  placeholder={t("exam.itemNamePlaceholder")}
+                  value={item.itemName}
+                  onChange={(e) => patchRow(index, { itemName: e.target.value })}
+                />
+                <Input
+                  placeholder={t("exam.value")}
+                  value={item.valueNum ?? ""}
+                  onChange={(e) =>
+                    patchRow(index, { valueNum: e.target.value === "" ? undefined : Number(e.target.value) })
+                  }
+                />
+                <Input
+                  placeholder={t("exam.text")}
+                  value={item.valueText ?? ""}
+                  onChange={(e) => patchRow(index, { valueText: e.target.value })}
+                />
+                <Input
+                  placeholder={t("exam.unit")}
+                  value={item.unit ?? ""}
+                  onChange={(e) => patchRow(index, { unit: e.target.value })}
+                />
+                <Button
+                  variant="ghost"
+                  size="icon"
+                  onClick={() => setItems((prev) => prev.filter((_, i) => i !== index))}
+                  disabled={items.length <= 1}
+                  title={t("action.removeRow")}
+                >
+                  <Trash2 />
+                </Button>
+              </div>
+            ))}
+            {error && <div className="text-sm text-destructive">{error}</div>}
+            {result && <div className="text-sm text-emerald-700">{result}</div>}
+            <div>
+              <Button onClick={submit} disabled={submitting}>
+                {submitting ? t("common.loading") : t("action.submit")}
+              </Button>
+            </div>
+          </CardContent>
+        </Card>
       </div>
-    </div>
+    </ScrollArea>
   );
 }
