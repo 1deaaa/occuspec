@@ -32,10 +32,10 @@ export function AppShell({ children }: { children: React.ReactNode }) {
   const pathname = usePathname();
   const router = useRouter();
   const { t, locale, setLocale } = useI18n();
-  const [authed, setAuthed] = useState(false);
+  const [authed, setAuthed] = useState(() => typeof window !== "undefined" && !!getToken());
 
   useEffect(() => {
-    setAuthed(!!getToken());
+    setAuthed(typeof window !== "undefined" && !!getToken());
   }, [pathname]);
 
   return (
