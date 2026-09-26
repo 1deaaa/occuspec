@@ -23,6 +23,8 @@ data-markdown/
 # 内部工作文档（不得进入开源仓库）
 原始开工总纲.md
 tmp_*.py
+# 面试准备材料（含个人求职背景，仅本地留存）
+docs/interview-prep.md
 
 # IDE 与编辑器
 .idea/
