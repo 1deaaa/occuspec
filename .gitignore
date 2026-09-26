@@ -23,6 +23,7 @@ data-markdown/
 # 内部工作文档（不得进入开源仓库）
 原始开工总纲.md
 tmp_*.py
+docs/Prep.md
 
 # IDE 与编辑器
 .idea/
